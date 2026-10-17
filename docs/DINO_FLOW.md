@@ -1,4 +1,4 @@
-# Dino screen-time experience — phase-one prototype
+# Dino screen-time experience - presentation and authority preparation
 
 This change implements the **presentation prototype and next-permitted-time forecast**, not a secure takeover, login greeter, browser extension or hibernation controller. No installed plugin loads it automatically. The existing policy draft still ends expired sessions using `terminate-user`; do not enable that draft expecting it to preserve applications through hibernation.
 
@@ -49,3 +49,24 @@ The same finish episode survives wake/restart: waking must not provide another t
 Use “Save your adventure” and “Your saved files are still on this PC.” Do not promise unsaved work survives, or call an Omarchy filesystem snapshot a saved desktop session. Hibernation captures memory; filesystem recovery snapshots do not substitute for it. Avoid blame or punishment messages. Display the exact next date/time and timezone only when the policy forecast supplies it; otherwise ask a parent.
 
 Hardware guidance: [Omarchy system sleep](https://omarchy.org/manual/system-sleep/), [Linux hibernation](https://www.kernel.org/doc/html/latest/admin-guide/pm/sleep-states.html#hibernation). No hibernation setup commands were run while creating this prototype.
+
+## Phase two: persistent authority and learner channel
+
+Implemented as a preparation backend, separate from the current session-termination grace:
+
+- Root-owned `/var/lib/family-lab/finish.json` holds an episode ID, phase and five-minute initial deadline for each policy-blocked learner. The one-time save action replaces that deadline with three minutes. Rest consumes it immediately. Neither action changes policy, login authorization or the existing session termination grace. **Do not use this preparation endpoint as a working save-work extension.**
+- UI/service restarts preserve episodes. Elapsed time includes suspend; either the wall deadline or boot deadline may expire it. A different boot consumes the period; it cannot create another save grant. A genuine allowed-to-blocked policy transition creates a new episode. Actual wake-triggered five-minute blocked-screen countdowns are not wired yet; callers cannot submit a wake/reset operation.
+- `/run/family-lab/learner.sock` permits local connections but authorizes each through kernel `SO_PEERCRED`, not a supplied peer/name/UID. It accepts only own-account `get`, `save` and `rest`, with a matching current episode for mutations. Parents use the separate existing policy socket. Unknown UIDs, policy operations, stale service state and stale episode IDs are rejected. These are account-level permissions, not proof that a child physically clicked a button: processes and SSH sessions with the same UID share that authority.
+- Save/rest attempts are audited, state writes are atomic, and failed persistence does not acknowledge a grant. Parent policy updates require a healthy refreshed policy sample before another learner action. Learner connections have a separate bounded worker pool from parent requests.
+
+For a deliberately installed development service only, the unprivileged adapter is:
+
+```sh
+/usr/local/libexec/family-lab-policy learner get
+/usr/local/libexec/family-lab-policy learner save EPISODE_ID
+/usr/local/libexec/family-lab-policy learner rest EPISODE_ID
+```
+
+Use the episode from the fresh own-account get response, not a typed household identity. Every response includes `power_enabled: false`. Rest records a prototype request only; it never hibernates. The ordinary `guardian/preview.qml` remains synthetic and is not connected to these commands. Ask-parent transport and protected QML actions remain for the guarded integration step.
+
+Run `python3 tests/check_dino_authority.py` for isolated persistence, deadlines, failure handling, permission separation and real socket peer-identity checks. No commands above were installed or run against the host service while implementing this phase.

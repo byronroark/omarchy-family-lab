@@ -17,12 +17,14 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from zoneinfo import ZoneInfo
 
 ETC = Path('/etc/family-lab')
 DATA = Path('/var/lib/family-lab')
 RUNTIME = Path('/run/family-lab')
 SOCKET = RUNTIME / 'policy.sock'
+LEARNER_SOCKET = RUNTIME / 'learner.sock'
 MAX_BYTES = 131072
 DAYS = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
 
@@ -217,6 +219,65 @@ def usage_valid(value):
                     raise ValueError('Invalid persisted deadline')
     return value
 
+class FinishEpisodes:
+    """Persistent preparation only: never unlocks, terminates or powers down a PC."""
+    def __init__(self, path):
+        self.path = path
+        self.rows = read(path) if path.exists() else {}
+        if not isinstance(self.rows, dict) or len(self.rows) > 8:
+            raise ValueError('Invalid finish episodes')
+        for peer, row in self.rows.items():
+            identifier(peer)
+            if not isinstance(row, dict) or set(row) != {'id','phase','expires','deadline','boot'}:
+                raise ValueError('Invalid finish episode')
+            if not isinstance(row['id'], str) or not re.fullmatch('[0-9a-f]{32}', row['id']):
+                raise ValueError('Invalid finish identity')
+            if row['phase'] not in ('time-up','saving','blocked') or not isinstance(row['boot'], str):
+                raise ValueError('Invalid finish phase')
+            for key in ('expires','deadline'):
+                if type(row[key]) not in (int,float) or not 0 <= row[key] <= 10**12:
+                    raise ValueError('Invalid finish deadline')
+
+    def store(self, rows):
+        atomic(self.path, rows)
+        self.rows = rows
+
+    def sync(self, blocked, now, boot, elapsed):
+        rows = {peer: copy.deepcopy(row) for peer,row in self.rows.items() if peer in blocked}
+        for peer in blocked:
+            row = rows.setdefault(peer, {'id': uuid.uuid4().hex, 'phase':'time-up',
+                'expires':now+300, 'boot':boot, 'deadline':elapsed+300})
+            # A different boot consumes the finish period; a reboot is not another grant.
+            if row['boot'] != boot or not alive({key:row[key] for key in ('expires','boot','deadline')}, now, boot, elapsed):
+                row['phase'] = 'blocked'
+        if rows != self.rows:
+            self.store(rows)
+
+    def view(self, peer, now, boot, elapsed):
+        row = self.rows.get(peer)
+        if row is None:
+            return {'episode':None, 'phase':'allowed', 'remaining':0, 'power_enabled':False}
+        remaining = max(0, min(row['expires']-now, row['deadline']-elapsed)) if row['boot'] == boot else 0
+        phase = row['phase'] if remaining > 0 else 'blocked'
+        return {'episode':row['id'], 'phase':phase, 'remaining':remaining if phase != 'blocked' else 0,
+                'power_enabled':False}
+
+    def action(self, peer, action, episode, now, boot, elapsed):
+        if action not in ('save','rest'):
+            raise ValueError('Unsupported finish action')
+        state = self.view(peer, now, boot, elapsed)
+        if state['episode'] != episode or state['episode'] is None:
+            raise ValueError('Finish episode changed; refresh before acting')
+        if action == 'save' and (state['phase'] != 'time-up' or state['remaining'] <= 0):
+            raise ValueError('Save period unavailable or already used')
+        rows = copy.deepcopy(self.rows)
+        row = rows[peer]
+        row.update(phase='saving' if action == 'save' else 'blocked',
+                   expires=now+180 if action == 'save' else now,
+                   deadline=elapsed+180 if action == 'save' else elapsed, boot=boot)
+        self.store(rows)
+        return self.view(peer, now, boot, elapsed)
+
 class Engine:
     def __init__(self, etc=ETC, data=DATA, runtime=RUNTIME):
         self.etc, self.data, self.runtime = etc, data, runtime
@@ -227,6 +288,7 @@ class Engine:
         self.state = read(data / 'usage.json') if (data / 'usage.json').exists() else {'days': {}, 'grants': {}, 'pauses': {}, 'blocked_since': {}, 'sites': {}}
         usage_valid(self.state)
         self.state.setdefault('sites', {})
+        self.finishes = FinishEpisodes(data / 'finish.json')
         self.last_tick = None
         self.boot = boot_id()
         self.status = {}
@@ -254,6 +316,35 @@ class Engine:
         if not name:
             raise PermissionError('This local account is not enrolled as a policy parent')
         return name
+
+    def learner_request(self, uid, req):
+        with self.lock:
+            config = read(self.etc / 'enrollment.json')
+            peers = [peer for peer,row in config['subjects'].items() if row['uid'] == uid]
+            if len(peers) != 1:
+                raise PermissionError('This account is not an enrolled learner')
+            if not isinstance(req, dict) or req.get('op') not in ('get','save','rest'):
+                raise ValueError('Unsupported learner action')
+            expected = {'op'} if req['op'] == 'get' else {'op','episode'}
+            if set(req) != expected:
+                raise ValueError('Unexpected learner action fields')
+            if self.last_success is None or not 0 <= boottime()-self.last_success <= 20 or self.status_generation != self.generation:
+                raise ValueError('Policy status changed or is stale; wait for refresh')
+            peer = peers[0]
+            now, elapsed = time.time(), boottime()
+            state = self.finishes.view(peer, now, self.boot, elapsed)
+            if req['op'] != 'get':
+                if not isinstance(req['episode'], str) or req['episode'] != state['episode'] or state['episode'] is None:
+                    raise ValueError('Finish episode changed; refresh before acting')
+                if req['op'] == 'save' and state['phase'] != 'time-up':
+                    raise ValueError('Save period unavailable or already used')
+                if req['op'] == 'rest' and state['phase'] == 'blocked':
+                    return dict(state, next_allowed=self.status[peer]['next_allowed'])
+                self.audit('learner:'+peer, 'dino-'+req['op'], {'episode':req['episode']})
+                state = self.finishes.action(peer, req['op'], req['episode'], now, self.boot, elapsed)
+            row = self.status[peer]
+            return dict(state, next_allowed=row['next_allowed'],
+                        note='Preparation only: does not change login permission, session grace or power state')
 
     def request(self, uid, req):
         with self.lock:
@@ -395,6 +486,7 @@ class Engine:
                     'bedtime_skipped_today': skip_bedtime,
                     'logged_in': enrollment['uid'] in active,
                     'next_allowed': next_allowed(self.current['policy'], self.state, peer, now) if blocked else None}
+            self.finishes.sync({peer for peer,row in result.items() if row['blocked']}, now, self.boot, elapsed)
             # Retain 30 daily totals; detailed browsing/application data is never collected here.
             for old in sorted(self.state['days'])[:-30]:
                 del self.state['days'][old]
@@ -467,11 +559,13 @@ def sessions():
     # Exclude per-user systemd manager sessions; count SSH, TTY and graphical user sessions once per UID.
     return {integer(row['uid'], 1, 2**31-1) for row in rows if row.get('class') in ('user', 'user-early', 'user-light')}
 
-def handle_connection(engine, connection):
+def handle_connection(engine, connection, learner=False):
     try:
         uid = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
-        engine.authorize(uid)
-        response = {'ok': True, 'result': engine.request(uid, read_message(connection))}
+        if not learner:
+            engine.authorize(uid)
+        handler = engine.learner_request if learner else engine.request
+        response = {'ok': True, 'result': handler(uid, read_message(connection))}
     except (ValueError, PermissionError, OSError, KeyError, TypeError, RecursionError) as error:
         response = {'ok': False, 'error': str(error)}
     try:
@@ -495,7 +589,11 @@ def daemon():
     server.bind(str(SOCKET))
     os.chown(SOCKET, 0, grp.getgrnam('family-lab-parents').gr_gid)
     os.chmod(SOCKET, 0o660); server.listen(16)
-    semaphore = threading.BoundedSemaphore(8)
+    LEARNER_SOCKET.unlink(missing_ok=True)
+    learner_server = socket.socket(socket.AF_UNIX)
+    learner_server.bind(str(LEARNER_SOCKET))
+    os.chmod(LEARNER_SOCKET, 0o666); learner_server.listen(8)
+    semaphores = {server:threading.BoundedSemaphore(8), learner_server:threading.BoundedSemaphore(4)}
     def monitor():
         while True:
             try:
@@ -511,15 +609,19 @@ def daemon():
             time.sleep(5)
     threading.Thread(target=monitor, daemon=True).start()
     while True:
-        connection, _ = server.accept()
+        ready, _, _ = select.select([server, learner_server], [], [])
+        listener = ready[0]
+        connection, _ = listener.accept()
+        is_learner = listener is learner_server
+        semaphore = semaphores[listener]
         if not semaphore.acquire(blocking=False):
             connection.close(); continue
-        def serve_one(conn):
+        def serve_one(conn, learner, limit):
             try:
-                handle_connection(engine,conn)
+                handle_connection(engine,conn,learner)
             finally:
-                semaphore.release()
-        threading.Thread(target=serve_one, args=(connection,), daemon=True).start()
+                limit.release()
+        threading.Thread(target=serve_one, args=(connection,is_learner,semaphore), daemon=True).start()
 
 def login_allowed(user, etc=ETC, runtime=RUNTIME, now=None, boot=None, elapsed=None):
     account = pwd.getpwnam(user)
@@ -540,9 +642,9 @@ def login_allowed(user, etc=ETC, runtime=RUNTIME, now=None, boot=None, elapsed=N
         return False
     return any(str(row['uid']) == uid and row['mode'] == 'enforce' and not row['blocked'] for row in status['subjects'].values())
 
-def client(req):
+def client(req, path=SOCKET):
     with socket.socket(socket.AF_UNIX) as connection:
-        connection.settimeout(10); connection.connect(str(SOCKET))
+        connection.settimeout(10); connection.connect(str(path))
         connection.sendall(json.dumps(req).encode()+b'\n')
         raw = b''
         while not raw.endswith(b'\n'):
@@ -642,6 +744,10 @@ def main(args):
             time.sleep(5)
     elif args == ['hibernation-check']:
         print(json.dumps(hibernation_capability(),indent=2))
+    elif args == ['learner', 'get']:
+        print(json.dumps(client({'op':'get'}, LEARNER_SOCKET), indent=2))
+    elif len(args) == 3 and args[0] == 'learner' and args[1] in ('save','rest'):
+        print(json.dumps(client({'op':args[1], 'episode':args[2]}, LEARNER_SOCKET), indent=2))
     elif args == ['status']:
         print(json.dumps(read(RUNTIME/'status.json'), indent=2, ensure_ascii=False))
     elif args and args[0] == 'local' and os.geteuid() == 0:
@@ -649,7 +755,7 @@ def main(args):
             raise ValueError('Usage: family-lab-policy local JSON_OPERATION')
         print(json.dumps(client(json.loads(args[1])), indent=2, ensure_ascii=False))
     else:
-        raise ValueError('Commands: status; hibernation-check; watch; recover (local root); remote (forced SSH); daemon (root); login-check (PAM); local JSON (root)')
+        raise ValueError('Commands: status; hibernation-check; learner get; learner save/rest EPISODE_ID; watch; recover (local root); remote (forced SSH); daemon (root); login-check (PAM); local JSON (root)')
 
 if __name__ == '__main__':
     try:

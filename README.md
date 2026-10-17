@@ -71,3 +71,5 @@ The new [parental-control implementation](docs/PARENTAL_CONTROLS.md) includes a 
 Learner IDs are configurable, and [helper-local display names](docs/IDENTITIES.md) can show a person's readable name on the request card while retaining a stable ID. Real names and household files stay out of this public repository.
 
 The [Dino flow prototype](docs/DINO_FLOW.md) adds a themed visual design, bounded save-time presentation and a next-permitted-time forecast. It does not yet replace session termination with secure locking/hibernation or provide a blocked-website page.
+
+The Dino preparation backend now persists finish episodes and exposes a UID-authenticated learner-only action socket. It does not extend the existing logout grace, wire the preview buttons, lock the session or perform hibernation. See [the authority integration limits](docs/DINO_FLOW.md#phase-two-persistent-authority-and-learner-channel) before testing.
