@@ -1,0 +1,578 @@
+#!/usr/bin/python3 -I
+"""Child-local policy authority. Linux only; fixed operations, no submitted commands."""
+import copy
+import datetime as dt
+import fcntl
+import grp
+import json
+import os
+from pathlib import Path
+import pwd
+import re
+import select
+import socket
+import struct
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from zoneinfo import ZoneInfo
+
+ETC = Path('/etc/family-lab')
+DATA = Path('/var/lib/family-lab')
+RUNTIME = Path('/run/family-lab')
+SOCKET = RUNTIME / 'policy.sock'
+MAX_BYTES = 131072
+DAYS = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
+
+def identifier(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', value):
+        raise ValueError('Use a plain ID with letters, numbers, hyphens or underscores')
+    return value
+
+def integer(value, low, high):
+    if type(value) is not int or not low <= value <= high:
+        raise ValueError('Number outside permitted range')
+    return value
+
+def label(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 80 or not all(c.isprintable() for c in value):
+        raise ValueError('Use 1-80 printable characters for a name')
+    return value
+
+def atomic(path, value, mode=0o600):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, prefix='.new-')
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'w') as output:
+            json.dump(value, output, ensure_ascii=False, allow_nan=False)
+            output.write('\n'); output.flush(); os.fsync(output.fileno())
+        os.replace(name, path)
+        parent = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+def read(path):
+    if path.stat().st_size > MAX_BYTES:
+        raise ValueError('State exceeds size limit')
+    return json.loads(path.read_text())
+
+def defaults(peers):
+    return {'schema': 1, 'timezone': 'UTC', 'subjects': {
+        peer: {'name': peer, 'mode': 'off', 'daily_minutes': {day: 90 for day in DAYS},
+               'hours': {day: [['08:00', '20:00']] for day in DAYS}, 'grace_seconds': 120,
+               'browser': {'enabled': False, 'blocked': [], 'allowed': [], 'safe_search': False}}
+        for peer in peers}}
+
+def minute(value):
+    if not isinstance(value, str) or not re.fullmatch(r'(?:[01][0-9]|2[0-3]):[0-5][0-9]|24:00', value):
+        raise ValueError('Use HH:MM, with 24:00 permitted only as the end')
+    h, m = map(int, value.split(':')); return h*60+m
+
+def validate(policy, enrolled, browsers=()):
+    if len(json.dumps(policy).encode()) > 32768:
+        raise ValueError('Policy exceeds 32 KiB')
+    if not isinstance(policy, dict) or set(policy) != {'schema', 'timezone', 'subjects'} or type(policy['schema']) is not int or policy['schema'] != 1:
+        raise ValueError('Unsupported policy schema')
+    if not isinstance(policy['timezone'], str):
+        raise ValueError('Invalid timezone')
+    ZoneInfo(policy['timezone'])
+    if not isinstance(policy['subjects'], dict) or set(policy['subjects']) != set(enrolled):
+        raise ValueError('Policy must match locally enrolled subjects; parents cannot enroll system users remotely')
+    enabled_browsers = 0
+    for peer, item in policy['subjects'].items():
+        identifier(peer)
+        if not isinstance(item, dict) or set(item) != {'name', 'mode', 'daily_minutes', 'hours', 'grace_seconds', 'browser'}:
+            raise ValueError('Unknown subject settings')
+        label(item['name'])
+        if item['mode'] not in ('off', 'monitor', 'enforce'):
+            raise ValueError('Mode must be off, monitor or enforce')
+        integer(item['grace_seconds'], 60, 600)
+        if not isinstance(item['daily_minutes'], dict) or set(item['daily_minutes']) != set(DAYS):
+            raise ValueError('Specify an allowance for all seven days')
+        if not isinstance(item['hours'], dict) or set(item['hours']) != set(DAYS):
+            raise ValueError('Specify hours for all seven days')
+        for day in DAYS:
+            integer(item['daily_minutes'][day], 0, 1440)
+            windows = item['hours'][day]
+            if not isinstance(windows, list) or len(windows) > 8:
+                raise ValueError('At most eight windows per day')
+            end = -1
+            for window in windows:
+                if not isinstance(window, list) or len(window) != 2:
+                    raise ValueError('Expected start/end hours')
+                a, b = map(minute, window)
+                if not end <= a < b <= 1440:
+                    raise ValueError('Hours must be sorted and nonoverlapping; split overnight windows across days')
+                end = b
+        browser = item['browser']
+        if not isinstance(browser, dict) or set(browser) != {'enabled', 'blocked', 'allowed', 'safe_search'}:
+            raise ValueError('Unknown browser settings')
+        if type(browser['enabled']) is not bool or type(browser['safe_search']) is not bool:
+            raise ValueError('Expected browser booleans')
+        for key in ('blocked', 'allowed'):
+            if not isinstance(browser[key], list) or len(browser[key]) > 200:
+                raise ValueError('At most 200 domains per list')
+            for domain in browser[key]:
+                if not isinstance(domain, str) or len(domain) > 253 or not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+', domain):
+                    raise ValueError('Use lowercase DNS domains, without URLs, paths, wildcards or commands')
+        if browser['enabled']:
+            enabled_browsers += 1
+            if not browsers:
+                raise ValueError('Administrator must enroll a machine-wide browser backend first')
+    if enabled_browsers > 1:
+        raise ValueError('Browser policies are machine-wide; use at most one browser profile per PC')
+    return policy
+
+def boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+def boottime():
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+def alive(grant, now, boot, elapsed):
+    if not grant or now >= grant['expires']:
+        return False
+    return grant['boot'] != boot or elapsed < grant['deadline']
+
+def usage_valid(value):
+    if not isinstance(value, dict) or not {'days','grants','pauses','blocked_since'} <= set(value):
+        raise ValueError('Invalid usage state')
+    if any(not isinstance(value.get(key, {}), dict) for key in ('days','grants','pauses','blocked_since','sites')):
+        raise ValueError('Invalid usage state dictionaries')
+    for day, rows in value['days'].items():
+        dt.date.fromisoformat(day)
+        if not isinstance(rows, dict) or any(type(n) not in (int,float) or not 0 <= n <= 10**9 for n in rows.values()):
+            raise ValueError('Invalid daily totals')
+    for key, minutes in value['grants'].items():
+        day, peer = key.split('/',1)
+        dt.date.fromisoformat(day);identifier(peer);integer(minutes,0,1440)
+    for key in ('pauses','blocked_since','sites'):
+        for timer in value.get(key,{}).values():
+            if not isinstance(timer,dict) or set(timer) != {'expires','boot','deadline'} or not isinstance(timer['boot'],str):
+                raise ValueError('Invalid persisted timer')
+            for field in ('expires','deadline'):
+                if type(timer[field]) not in (int,float) or not 0 <= timer[field] <= 10**12:
+                    raise ValueError('Invalid persisted deadline')
+    return value
+
+class Engine:
+    def __init__(self, etc=ETC, data=DATA, runtime=RUNTIME):
+        self.etc, self.data, self.runtime = etc, data, runtime
+        self.lock = threading.RLock()
+        self.config = read(etc / 'enrollment.json')
+        self.current = read(data / 'policy.json')
+        validate(self.current['policy'], self.config['subjects'], self.config['browsers'])
+        self.state = read(data / 'usage.json') if (data / 'usage.json').exists() else {'days': {}, 'grants': {}, 'pauses': {}, 'blocked_since': {}, 'sites': {}}
+        usage_valid(self.state)
+        self.state.setdefault('sites', {})
+        self.last_tick = None
+        self.boot = boot_id()
+        self.status = {}
+        self.last_success = None
+        self.browser_error = None
+        self.last_terminated = {}
+        self.generation = 0
+        self.status_generation = -1
+
+    def audit(self, who, action, details):
+        path = self.data / 'audit.jsonl'
+        if path.exists() and path.stat().st_size > 1024*1024:
+            os.replace(path, self.data / 'audit.previous.jsonl')
+        with path.open('a') as file:
+            file.write(json.dumps({'time': dt.datetime.now(dt.timezone.utc).isoformat(), 'parent': who,
+                                   'action': action, 'details': details}, ensure_ascii=False)+'\n')
+            file.flush(); os.fsync(file.fileno())
+
+    def authorize(self, uid):
+        if uid == 0:
+            return 'local-admin'
+        # Reload revocations for every request. Caller cannot select their identity.
+        config = read(self.etc / 'enrollment.json')
+        name = config['parents'].get(str(uid))
+        if not name:
+            raise PermissionError('This local account is not enrolled as a policy parent')
+        return name
+
+    def request(self, uid, req):
+        with self.lock:
+            who = self.authorize(uid)
+            if not isinstance(req, dict):
+                raise ValueError('Expected operation object')
+            op = req.get('op')
+            if op == 'get' and set(req) == {'op'}:
+                return {'revision': self.current['revision'], 'policy': self.current['policy'], 'status': self.status,
+                        'browser_error': self.browser_error, 'healthy': self.last_success is not None and boottime()-self.last_success <= 20}
+            if op == 'summary' and set(req) == {'op'}:
+                self.audit(who, 'summary', {})
+                return {'coverage': 'Logged-in time while awake; not foreground applications, attention or website visits',
+                        'days': self.state['days'], 'status': self.status, 'timezone': self.current['policy']['timezone']}
+            if op == 'history' and set(req) == {'op'}:
+                path = self.data / 'audit.jsonl'
+                return {'events': [json.loads(line) for line in path.read_text().splitlines()][-25:] if path.exists() else []}
+            if op in ('apply', 'undo'):
+                expected = {'op', 'base_revision', 'policy'} if op == 'apply' else {'op', 'base_revision'}
+                if set(req) != expected or type(req['base_revision']) is not int or req['base_revision'] != self.current['revision']:
+                    raise ValueError('Settings changed. Fetch and review the latest revision before applying.')
+                candidate = req.get('policy') if op == 'apply' else self.current.get('previous')
+                if candidate is None:
+                    raise ValueError('No previous policy to restore')
+                candidate = copy.deepcopy(validate(candidate, self.config['subjects'], self.config['browsers']))
+                if any(s['mode'] == 'enforce' for s in candidate['subjects'].values()):
+                    pam = self.etc / 'pam-ready'
+                    if not pam.exists():
+                        raise ValueError('Administrator must install and verify the PAM gate before enforcement')
+                # Audit before committing: a logging failure must not silently change policy.
+                changes = {peer: [key for key,value in item.items() if value != self.current['policy']['subjects'][peer][key]] for peer,item in candidate['subjects'].items()}
+                self.audit(who, op, {'revision': self.current['revision']+1, 'changed_fields': changes, 'timezone_changed': candidate['timezone'] != self.current['policy']['timezone']})
+                updated = {'revision': self.current['revision']+1, 'policy': candidate, 'previous': self.current['policy']}
+                # Persist a conservative gate first: disk failure cannot turn enforcement off.
+                gate = {'subjects': {str(row['uid']): candidate['subjects'][peer]['mode'] == 'enforce' or self.current['policy']['subjects'][peer]['mode'] == 'enforce' for peer,row in self.config['subjects'].items()}}
+                atomic(self.etc / 'gate.json', gate, 0o644)
+                atomic(self.data / 'policy.json', updated)
+                self.current = updated
+                self.generation += 1
+                atomic(self.etc / 'gate.json', {'subjects': {str(row['uid']): candidate['subjects'][peer]['mode'] == 'enforce' for peer,row in self.config['subjects'].items()}}, 0o644)
+                return {'revision': updated['revision']}
+            if op == 'allow-site' and set(req) == {'op', 'peer', 'domain', 'minutes'}:
+                peer = identifier(req['peer'])
+                if peer not in self.config['subjects'] or not self.current['policy']['subjects'][peer]['browser']['enabled']:
+                    raise ValueError('Enable enrolled browser rules first')
+                domain = req['domain']
+                candidate = copy.deepcopy(self.current['policy'])
+                candidate['subjects'][peer]['browser']['allowed'] = [domain]
+                validate(candidate, self.config['subjects'], self.config['browsers'])
+                minutes = integer(req['minutes'], 1, 120)
+                self.audit(who, 'allow-site', {'peer': peer, 'domain': domain, 'minutes': minutes})
+                self.state['sites'] = {d:g for d,g in self.state['sites'].items() if alive(g,time.time(),self.boot,boottime())}
+                if domain not in self.state['sites'] and len(self.state['sites']) >= 200:
+                    raise ValueError('At most 200 live temporary site exceptions')
+                self.generation += 1
+                self.state['sites'][domain] = {'expires': time.time()+minutes*60, 'boot': self.boot, 'deadline': boottime()+minutes*60}
+                atomic(self.data / 'usage.json', self.state)
+                return {'accepted': True, 'note': 'Managed browser refresh/restart may be required.'}
+            if op in ('extra', 'pause') and set(req) == {'op', 'peer', 'minutes'}:
+                peer = identifier(req['peer'])
+                if peer not in self.config['subjects']:
+                    raise ValueError('Subject not enrolled')
+                minutes = integer(req['minutes'], 1, 120)
+                now = time.time()
+                local = dt.datetime.fromtimestamp(now, ZoneInfo(self.current['policy']['timezone']))
+                self.audit(who, op, {'peer': peer, 'minutes': minutes})
+                self.generation += 1
+                if op == 'pause':
+                    self.state['pauses'][peer] = {'expires': now+minutes*60, 'boot': self.boot, 'deadline': boottime()+minutes*60}
+                else:
+                    key = local.date().isoformat() + '/' + peer
+                    self.state['grants'][key] = min(1440, self.state['grants'].get(key, 0)+minutes)
+                atomic(self.data / 'usage.json', self.state)
+                return {'accepted': True, 'note': 'Extra time changes today’s allowance only; it does not override allowed hours.' if op == 'extra' else 'Pause expires automatically; no permanent policy change.'}
+            raise ValueError('Unsupported operation or fields')
+
+    def tick(self, active, now=None, monotonic=None, elapsed=None):
+        """active contains enrolled UIDs with any user session. No idle hints trusted."""
+        with self.lock:
+            now = time.time() if now is None else now
+            monotonic = time.monotonic() if monotonic is None else monotonic
+            elapsed = boottime() if elapsed is None else elapsed
+            local = dt.datetime.fromtimestamp(now, ZoneInfo(self.current['policy']['timezone']))
+            today = local.date().isoformat()
+            # A backward wall-clock jump cannot reset a previously observed day's allowance.
+            prior_days = sorted(self.state['days'])
+            counter_day = max(today, prior_days[-1]) if prior_days else today
+            delta = 0 if self.last_tick is None else max(0, min(10, monotonic-self.last_tick))
+            self.last_tick = monotonic
+            result = {}
+            for peer, enrollment in self.config['subjects'].items():
+                item = self.current['policy']['subjects'][peer]
+                day = self.state['days'].setdefault(counter_day, {})
+                used = day.get(peer, 0)
+                if item['mode'] != 'off' and enrollment['uid'] in active:
+                    used += delta
+                    day[peer] = used
+                allowance = item['daily_minutes'][DAYS[local.weekday()]]*60 + self.state['grants'].get(counter_day+'/'+peer, 0)*60
+                mins = local.hour*60+local.minute
+                in_hours = any(minute(a) <= mins < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])
+                paused = alive(self.state['pauses'].get(peer), now, self.boot, elapsed)
+                reason = 'outside-hours' if not in_hours else 'daily-limit' if used >= allowance else ''
+                blocked = item['mode'] == 'enforce' and bool(reason) and not paused
+                grace_left = None
+                if blocked:
+                    timer = self.state['blocked_since'].setdefault(peer, {'expires': now+item['grace_seconds'],
+                        'boot': self.boot, 'deadline': elapsed+item['grace_seconds']})
+                    # While blocked, never restart the countdown on reconnect/restart.
+                    grace_left = max(0, min(timer['expires']-now, timer['deadline']-elapsed if timer['boot'] == self.boot else timer['expires']-now))
+                else:
+                    self.state['blocked_since'].pop(peer, None)
+                result[peer] = {'name': item['name'], 'uid': enrollment['uid'], 'mode': item['mode'],
+                    'day': counter_day, 'used_seconds': round(used), 'remaining_seconds': max(0, round(allowance-used)),
+                    'would_block': bool(reason), 'reason': reason, 'blocked': blocked,
+                    'grace_seconds': None if grace_left is None else round(grace_left), 'paused': paused,
+                    'logged_in': enrollment['uid'] in active}
+            # Retain 30 daily totals; detailed browsing/application data is never collected here.
+            for old in sorted(self.state['days'])[:-30]:
+                del self.state['days'][old]
+            self.state['sites'] = {d:g for d,g in self.state['sites'].items() if alive(g,now,self.boot,elapsed)}
+            self.state['grants'] = {k:v for k,v in self.state['grants'].items() if k[:10] >= min(self.state['days'])}
+            self.status = result
+            self.status_generation = self.generation
+            atomic(self.data / 'usage.json', self.state)
+            atomic(self.runtime / 'status.json', {'updated': now, 'boot': self.boot, 'elapsed': elapsed,
+                'revision': self.current['revision'], 'subjects': result, 'browser_error': self.browser_error}, 0o644)
+            # Persistent minimal gate protects enforced accounts during daemon failure/reboot.
+            atomic(self.etc / 'gate.json', {'subjects': {str(e['uid']): self.current['policy']['subjects'][p]['mode'] == 'enforce'
+                                                        for p,e in self.config['subjects'].items()}}, 0o644)
+            self.last_success = boottime()
+            return result
+
+    def enforce(self, status):
+        with self.lock:
+            # A grant/policy change acknowledged after this tick invalidates its kill decision.
+            if status is not self.status or self.status_generation != self.generation:
+                return
+            for peer, state in status.items():
+                if state['mode'] == 'enforce' and state['blocked'] and state['grace_seconds'] == 0 and state['logged_in'] and time.monotonic()-self.last_terminated.get(peer, -1000) > 10:
+                    self.audit('service', 'terminate', {'peer': peer, 'reason': state['reason']})
+                    uid = integer(self.config['subjects'][peer]['uid'], 1000, 2**31-1)
+                    subprocess.run(['/usr/bin/loginctl', 'terminate-user', str(uid)], check=True, timeout=5)
+                    self.last_terminated[peer] = time.monotonic()
+
+    def browser(self):
+        with self.lock:
+            items = [i['browser'] for i in self.current['policy']['subjects'].values() if i['browser']['enabled']]
+            policy = {}
+            if items:
+                item = items[0]
+                temporary = [domain for domain,grant in self.state['sites'].items() if alive(grant, time.time(), self.boot, boottime())]
+                policy = {'URLBlocklist': item['blocked'], 'URLAllowlist': sorted(set(item['allowed']+temporary)),
+                          'ForceGoogleSafeSearch': item['safe_search']}
+            # Only this dedicated file is owned by Family Lab. Existing policies are never overwritten.
+            for backend in self.config['browsers']:
+                if backend != 'chromium':
+                    raise ValueError('Unsupported browser backend')
+                path = Path('/etc/chromium/policies/managed/family-lab.json')
+                if not path.parent.is_dir():
+                    raise ValueError('Browser policy directory not prepared by installer')
+                if not path.exists() or read(path) != policy:
+                    atomic(path, policy, 0o644)
+
+
+def read_message(connection):
+    deadline=time.monotonic()+3
+    raw = b''
+    while b'\n' not in raw:
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            raise ValueError('Request timed out')
+        connection.settimeout(remaining)
+        chunk = connection.recv(min(4096, MAX_BYTES+1-len(raw)))
+        if not chunk:
+            raise ValueError('Incomplete request')
+        raw += chunk
+        if len(raw) > MAX_BYTES:
+            raise ValueError('Request too large')
+    if raw.split(b'\n',1)[1]:
+        raise ValueError('Only one request permitted')
+    return json.loads(raw)
+
+def sessions():
+    value = subprocess.run(['/usr/bin/loginctl', 'list-sessions', '--json=short'], check=True, capture_output=True, text=True, timeout=3)
+    rows = json.loads(value.stdout)
+    # Exclude per-user systemd manager sessions; count SSH, TTY and graphical user sessions once per UID.
+    return {integer(row['uid'], 1, 2**31-1) for row in rows if row.get('class') in ('user', 'user-early', 'user-light')}
+
+def handle_connection(engine, connection):
+    try:
+        uid = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1]
+        engine.authorize(uid)
+        response = {'ok': True, 'result': engine.request(uid, read_message(connection))}
+    except (ValueError, PermissionError, OSError, KeyError, TypeError, RecursionError) as error:
+        response = {'ok': False, 'error': str(error)}
+    try:
+        connection.sendall(json.dumps(response, ensure_ascii=False).encode()+b'\n')
+    except OSError:
+        pass
+    finally:
+        connection.close()
+
+def daemon():
+    if os.geteuid() != 0:
+        raise PermissionError('Policy service requires root')
+    os.umask(0o077)
+    RUNTIME.mkdir(mode=0o755, parents=True, exist_ok=True)
+    RUNTIME.chmod(0o755)
+    guard = (RUNTIME/'daemon.lock').open('a')
+    fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    engine = Engine()
+    SOCKET.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX)
+    server.bind(str(SOCKET))
+    os.chown(SOCKET, 0, grp.getgrnam('family-lab-parents').gr_gid)
+    os.chmod(SOCKET, 0o660); server.listen(16)
+    semaphore = threading.BoundedSemaphore(8)
+    def monitor():
+        while True:
+            try:
+                try:
+                    engine.browser(); engine.browser_error = None
+                except (OSError, ValueError) as error:
+                    engine.browser_error = str(error)
+                status = engine.tick(sessions())
+                engine.enforce(status)
+            except Exception as error:
+                # Do not refresh gate health when session/state acquisition fails.
+                print('Policy monitor error:', error, file=sys.stderr, flush=True)
+            time.sleep(5)
+    threading.Thread(target=monitor, daemon=True).start()
+    while True:
+        connection, _ = server.accept()
+        if not semaphore.acquire(blocking=False):
+            connection.close(); continue
+        def serve_one(conn):
+            try:
+                handle_connection(engine,conn)
+            finally:
+                semaphore.release()
+        threading.Thread(target=serve_one, args=(connection,), daemon=True).start()
+
+def login_allowed(user, etc=ETC, runtime=RUNTIME, now=None, boot=None, elapsed=None):
+    account = pwd.getpwnam(user)
+    uid = str(account.pw_uid)
+    # Parent administrators remain a local recovery path, even if state is corrupt.
+    if account.pw_uid == 0 or user in grp.getgrnam('wheel').gr_mem or account.pw_gid == grp.getgrnam('wheel').gr_gid:
+        return True
+    enrolled = read(etc / 'enrollment.json')
+    if account.pw_uid not in [row['uid'] for row in enrolled['subjects'].values()]:
+        return True
+    gate = read(etc / 'gate.json')
+    if not gate['subjects'].get(uid, False):
+        return True
+    status = read(runtime / 'status.json')
+    elapsed = boottime() if elapsed is None else elapsed
+    boot = boot_id() if boot is None else boot
+    if status['boot'] != boot or not 0 <= elapsed-status['elapsed'] <= 20:
+        return False
+    return any(str(row['uid']) == uid and row['mode'] == 'enforce' and not row['blocked'] for row in status['subjects'].values())
+
+def client(req):
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(10); connection.connect(str(SOCKET))
+        connection.sendall(json.dumps(req).encode()+b'\n')
+        raw = b''
+        while not raw.endswith(b'\n'):
+            chunk = connection.recv(4096)
+            if not chunk or len(raw)+len(chunk) > MAX_BYTES:
+                raise ValueError('Invalid service response')
+            raw += chunk
+    response = json.loads(raw)
+    if not response['ok']:
+        raise ValueError(response['error'])
+    return response['result']
+
+def remote():
+    # Forced-command account identity comes from SO_PEERCRED, never the payload or remote command.
+    deadline=time.monotonic()+5; raw=b''
+    while True:
+        if not select.select([0], [], [], max(0,deadline-time.monotonic()))[0]:
+            raise ValueError('Request timed out')
+        chunk=os.read(0,min(4096,MAX_BYTES+1-len(raw))); raw+=chunk
+        if len(raw)>MAX_BYTES:
+            raise ValueError('Request too large')
+        if not chunk:
+            break
+    print(json.dumps(client(json.loads(raw)), ensure_ascii=False))
+
+def recover(etc=ETC, data=DATA, runtime=RUNTIME):
+    """Local administrator only. Stop service before touching its state."""
+    subprocess.run(['/usr/bin/systemctl','stop','family-lab-policy.service'],check=True,timeout=20)
+    config = read(etc/'enrollment.json')
+    path = data/'policy.json'
+    if path.exists():
+        import shutil
+        shutil.copyfile(path,data/'policy.before-recovery.json')
+        (data/'policy.before-recovery.json').chmod(0o600)
+    try:
+        current=read(path)
+        previous=copy.deepcopy(current['policy'])
+        validate(previous,config['subjects'],config['browsers'])
+        policy=copy.deepcopy(previous)
+        revision=integer(current['revision'],0,2**31-1)+1
+    except (OSError,ValueError,KeyError,TypeError):
+        previous=None;policy=defaults(config['subjects']);revision=0
+    for item in policy['subjects'].values():
+        item['mode']='off';item['browser']['enabled']=False
+    atomic(path,{'revision':revision,'policy':policy,'previous':previous})
+    atomic(etc/'gate.json',{'subjects':{str(row['uid']):False for row in config['subjects'].values()}},0o644)
+    usage=data/'usage.json'
+    if usage.exists():
+        try:
+            value=read(usage)
+            usage_valid(value)
+        except (OSError,ValueError,KeyError,TypeError):
+            os.replace(usage,data/'usage.before-recovery.json')
+    if 'chromium' in config['browsers']:
+        atomic(Path('/etc/chromium/policies/managed/family-lab.json'),{},0o644)
+    print('All time/browser modules disabled locally; service stopped. Restart deliberately after diagnosis. Browser refresh/restart may be needed.')
+
+def main(args):
+    if args == ['daemon']:
+        daemon()
+    elif args == ['login-check']:
+        # Missing enrollment permits ordinary systems; corrupt/stale enrolled gate fails closed.
+        if not (ETC/'gate.json').exists():
+            return
+        user = os.environ.get('PAM_USER', '')
+        if not user or not login_allowed(user):
+            raise PermissionError('Family Lab: time unavailable; ask an enrolled parent')
+    elif args == ['recover'] and os.geteuid() == 0:
+        recover()
+    elif args == ['remote']:
+        remote()
+    elif args == ['watch']:
+        if not os.environ.get('DBUS_SESSION_BUS_ADDRESS') or os.environ.get('SSH_CONNECTION'):
+            raise ValueError('Run watch visibly in the learner graphical desktop, never over SSH')
+        seen=set()
+        print('Family Lab time warnings active. Ctrl+C stops warnings, not root enforcement.')
+        while True:
+            data=read(RUNTIME/'status.json')
+            if data['boot'] != boot_id() or not 0 <= boottime()-data['elapsed'] <= 20:
+                raise ValueError('Time status is stale. Ask a parent to inspect the policy service.')
+            for peer,row in data['subjects'].items():
+                if row['uid']!=os.getuid() or row['mode']=='off':
+                    continue
+                remaining=row['grace_seconds'] if row['blocked'] else row['remaining_seconds']
+                for threshold in (300,120,60,30):
+                    key=(data['revision'],row['day'],peer,row['blocked'],threshold)
+                    if remaining is not None and remaining>threshold:
+                        seen.discard(key)
+                    if remaining is not None and remaining<=threshold and key not in seen:
+                        seen.add(key)
+                        text=('Save your work. Session ends in about '+str(remaining)+' seconds.' if row['blocked'] else
+                              'About '+str(remaining//60)+' minutes of today’s allowance remain.')
+                        if row['mode']=='monitor':
+                            text+=' Monitoring only; restrictions are not enforced.'
+                        subprocess.run(['omarchy-notification-send','--app-name','Family Lab','Family Lab time',text],check=True,timeout=5)
+                        break
+            time.sleep(5)
+    elif args == ['status']:
+        print(json.dumps(read(RUNTIME/'status.json'), indent=2, ensure_ascii=False))
+    elif args and args[0] == 'local' and os.geteuid() == 0:
+        if len(args) != 2:
+            raise ValueError('Usage: family-lab-policy local JSON_OPERATION')
+        print(json.dumps(client(json.loads(args[1])), indent=2, ensure_ascii=False))
+    else:
+        raise ValueError('Commands: status; watch; recover (local root); remote (forced SSH); daemon (root); login-check (PAM); local JSON (root)')
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except Exception as error:
+        print('Family Lab policy: '+str(error),file=sys.stderr)
+        sys.exit(1)

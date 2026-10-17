@@ -21,7 +21,7 @@ Ui.BorderSurface {
     color: Color.notifications.background
     radius: Style.cornerRadius
     borderSpec: Border.surfaceSpec("notifications", "border", Color.notifications.border, Style.normalBorderWidth)
-    Accessible.name: "Family Lab help request from " + String(request.peer || "")
+    Accessible.name: "Family Lab help request from " + String(request.name || request.peer || "")
     FontMetrics {
         id: buttonMetrics
         font.family: card.fontFamily
@@ -65,7 +65,7 @@ Ui.BorderSurface {
         }
         Text {
             Layout.fillWidth: true
-            text: "> " + String(card.request.peer || "learner")
+            text: "> " + String(card.request.name || card.request.peer || "learner")
             textFormat: Text.PlainText
             wrapMode: Text.WrapAnywhere
             color: Color.notifications.text

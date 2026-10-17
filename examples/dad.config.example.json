@@ -10,5 +10,9 @@
     }
   },
   "relay_sources": {},
-  "notification_backend": "native"
+  "notification_backend": "native",
+  "peer_labels": {
+    "learner-a": "Example Learner"
+  },
+  "policy_aliases": {}
 }

@@ -29,3 +29,5 @@ Application-specific setup, GPU drivers and unidentified third-party plugins sta
 ## Modular parental controls and reporting
 
 See [the staged implementation sequence](PARENTAL_CONTROLS.md). Markdown reporting now has a separate experimental CLI with imported observations and optional LocalSend sharing; automatic activity collection and parental enforcement remain planned.
+
+The first child-local controls now have an experimental implementation (see PARENTAL_CONTROLS.md); real service/PAM/browser acceptance is still pending. Further work includes supported DNS backends, application rules, visible foreground/browser collectors, graphical policy forms, unified report sharing, and Notebook presentation. Configurable IDs and private helper-local peer labels are implemented in IDENTITIES.md.

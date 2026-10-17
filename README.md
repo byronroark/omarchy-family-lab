@@ -63,3 +63,9 @@ MIT licensed. No official compatibility or security certification is implied.
 ## Optional reporting and parental-control roadmap
 
 The experimental [Markdown reporting foundation](docs/REPORTING.md) supports explicit observation imports, separate report-only SSH retrieval, and optional interactive LocalSend sharing. It does not yet collect activity automatically or enforce restrictions. See the [parental-control implementation sequence](docs/PARENTAL_CONTROLS.md) for child-local policy management, monitoring, schedules, filtering, and parent UI plans.
+
+## Experimental child-local controls and private names
+
+The new [parental-control implementation](docs/PARENTAL_CONTROLS.md) includes a child-local root policy service, independent parent authorization, revision conflicts/undo, persistent logged-in time monitoring, optional PAM/session enforcement, a parent terminal menu and a scoped Chromium browser-policy adapter. Nothing is installed automatically. **Actual Omarchy login, service and browser acceptance tests remain required; this is not a production-ready parental-control suite.** DNS filtering, app restrictions, automatic app/site history, graphical policy forms and Notebook import remain unfinished.
+
+Learner IDs are configurable, and [helper-local display names](docs/IDENTITIES.md) can show a person's readable name on the request card while retaining a stable ID. Real names and household files stay out of this public repository.

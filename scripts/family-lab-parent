@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Parent-facing local menu; policy requests travel only through an enrolled SSH alias."""
+import datetime as dt
+import html
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+os.umask(0o077)
+HOME=Path.home()
+CONFIG=HOME/'.config/family-lab/config.json'
+STATE=HOME/'.local/state/family-lab/policies'
+LIMIT=131072
+DAYS=('mon','tue','wed','thu','fri','sat','sun')
+
+def peer_id(value):
+    if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',value):
+        raise ValueError('Invalid peer or SSH alias')
+    return value
+
+def ask(peer, operation):
+    peer_id(peer)
+    host=json.loads(CONFIG.read_text()).get('policy_aliases',{}).get(peer)
+    if not host:
+        raise ValueError('No separately enrolled policy SSH alias for this learner')
+    peer_id(host)
+    # Size-bound the authenticated remote response without loading arbitrary output into RAM.
+    import resource
+    def limit():
+        resource.setrlimit(resource.RLIMIT_FSIZE,(LIMIT,LIMIT))
+    with tempfile.TemporaryFile() as output:
+        subprocess.run(['ssh','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',
+                        '-o','ControlMaster=no','-o','ControlPath=none',host],
+                       input=json.dumps(operation).encode(),stdout=output,check=True,timeout=15,preexec_fn=limit)
+        output.seek(0);data=json.load(output)
+    return data
+
+def store(peer, data):
+    STATE.mkdir(mode=0o700,parents=True,exist_ok=True)
+    fd,name=tempfile.mkstemp(dir=STATE)
+    with os.fdopen(fd,'w') as output:
+        json.dump(data,output,ensure_ascii=False,indent=2);output.write('\n')
+    path=STATE/(peer_id(peer)+'.json');os.replace(name,path)
+    return path
+
+def clean(value):
+    return html.escape(str(value)).replace('|','&#124;').replace('[','&#91;').replace(']','&#93;').replace('`','&#96;').replace('*','&#42;').replace('_','&#95;')
+
+def report(peer):
+    data=ask(peer,{'op':'summary'})
+    lines=['# Family Lab time report','', 'Generated: '+dt.datetime.now(dt.timezone.utc).isoformat(),'',
+           'Private household report. '+data['coverage']+'.','',
+           'Current policy timezone: '+clean(data['timezone'])+'. Historical day labels are retained if timezone settings change.','',
+           'No website or application collector is included in this report. Missing activity detail is unknown.', '',
+           '| Day (policy timezone) | Learner ID | Logged-in minutes |','| --- | --- | ---: |']
+    for day,rows in sorted(data['days'].items()):
+        for learner,seconds in sorted(rows.items()):
+            lines.append('| '+clean(day)+' | '+clean(learner)+f' | {seconds/60:.1f} |')
+    if not any(data['days'].values()):
+        lines.append('| No observations | Unknown | — |')
+    STATE.mkdir(mode=0o700,parents=True,exist_ok=True)
+    fd,name=tempfile.mkstemp(prefix=peer_id(peer)+'-time-',suffix='.md',dir=STATE)
+    with os.fdopen(fd,'w') as output:
+        output.write('\n'.join(lines)+'\n')
+    return name
+
+def menu(peer):
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        raise ValueError('Open the parent menu in your own interactive terminal')
+    while True:
+        snapshot=ask(peer,{'op':'get'});store(peer,snapshot)
+        if peer not in snapshot['policy']['subjects']:
+            raise ValueError('Peer does not match policy enrollment')
+        subject=snapshot['policy']['subjects'][peer]
+        print('\n[ family lab ]  '+subject['name']+' ('+peer+')  revision '+str(snapshot['revision']))
+        print('Mode: '+subject['mode']+' | timezone: '+snapshot['policy']['timezone'])
+        for key,row in snapshot['status'].items():
+            print(f"  {row['name']}: {row['used_seconds']//60} min used; {row['remaining_seconds']//60} min left; {row['reason'] or 'within limits'}")
+        if not snapshot.get('healthy', False):
+            print('SERVICE UNHEALTHY / starting: verify local service before relying on controls.')
+        if snapshot.get('browser_error'):
+            print('BROWSER ERROR: '+snapshot['browser_error'])
+        print('1 Daily allowance   2 Allowed hours   3 Mode   4 Add 15 minutes   5 Add 30 minutes')
+        print('6 Pause time 15 min  7 Browser rules  8 Undo settings  9 Save time report  10 Allow site 15 min  0 Exit')
+        action=input('Choose: ').strip()
+        try:
+            if action=='0':
+                return
+            if action in ('4','5','6'):
+                print(ask(peer,{'op':'pause' if action=='6' else 'extra','peer':peer,'minutes':30 if action=='5' else 15}))
+                continue
+            if action=='10':
+                print(ask(peer,{'op':'allow-site','peer':peer,'domain':input('Domain to allow for 15 minutes: ').strip(),'minutes':15}))
+                continue
+            if action=='8':
+                if input('Restore previous settings? Type yes: ')=='yes':
+                    print(ask(peer,{'op':'undo','base_revision':snapshot['revision']}))
+                continue
+            if action=='9':
+                print('Saved private Markdown: '+report(peer));continue
+            if action=='1':
+                weekday=int(input('Minutes per weekday (0-1440): '));weekend=int(input('Minutes per weekend day (0-1440): '))
+                subject['daily_minutes']={day:weekday if i<5 else weekend for i,day in enumerate(DAYS)}
+            elif action=='2':
+                start=input('Allowed start HH:MM: ').strip();end=input('Allowed end HH:MM (24:00 supported): ').strip()
+                subject['hours']={day:[[start,end]] for day in DAYS}
+            elif action=='3':
+                subject['mode']=input('Mode (off / monitor / enforce): ').strip()
+                if subject['mode']=='enforce' and input('Session logout may discard unsaved work. Type ENFORCE: ')!='ENFORCE':
+                    continue
+            elif action=='7':
+                print('Chromium rules affect every user/profile on this enrolled PC. Other browsers/apps are not filtered.')
+                enabled=input('Enable browser rules? yes/no: ')=='yes'
+                blocked=[x.strip() for x in input('Blocked domains, comma-separated (empty clears): ').split(',') if x.strip()]
+                allowed=[x.strip() for x in input('Allowed exceptions, comma-separated (empty clears): ').split(',') if x.strip()]
+                safe=input('Force Google SafeSearch in Chromium? yes/no: ')=='yes'
+                subject['browser']={'enabled':enabled,'blocked':blocked,'allowed':allowed,'safe_search':safe}
+            else:
+                print('Choose a listed action.');continue
+            if input('Apply these settings? Type yes: ')=='yes':
+                print(ask(peer,{'op':'apply','base_revision':snapshot['revision'],'policy':snapshot['policy']}))
+        except (ValueError,KeyError,TypeError,OSError,subprocess.SubprocessError) as error:
+            print('Request failed or reply was lost; verify refreshed status: '+str(error))
+
+def main(args):
+    if len(args)<2:
+        raise ValueError('Usage: family-lab-parent menu|get|report PEER; apply PEER FILE; timezone PEER ZONE')
+    command,peer,*rest=args;peer_id(peer)
+    if command=='menu' and not rest:
+        menu(peer)
+    elif command=='get' and not rest:
+        print(store(peer,ask(peer,{'op':'get'})))
+    elif command=='report' and not rest:
+        print(report(peer))
+    elif command=='apply' and len(rest)==1:
+        path=Path(rest[0])
+        if path.stat().st_size>LIMIT:
+            raise ValueError('Draft too large')
+        draft=json.loads(path.read_text())
+        print(ask(peer,{'op':'apply','base_revision':draft['revision'],'policy':draft['policy']}))
+    elif command=='timezone' and len(rest)==1:
+        data=ask(peer,{'op':'get'});data['policy']['timezone']=rest[0]
+        print(ask(peer,{'op':'apply','base_revision':data['revision'],'policy':data['policy']}))
+    else:
+        raise ValueError('Unknown command/arguments')
+
+if __name__=='__main__':
+    try:
+        main(sys.argv[1:])
+    except (ValueError,OSError,KeyError,TypeError,subprocess.SubprocessError) as error:
+        print('Family Lab parent: '+str(error),file=sys.stderr);sys.exit(1)

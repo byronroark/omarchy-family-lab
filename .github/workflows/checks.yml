@@ -29,3 +29,7 @@ jobs:
         run: python3 tests/check_control.py
       - name: Verify optional Markdown reporting
         run: python3 tests/check_reporting.py
+      - name: Verify child-local policy boundaries (no live installation)
+        run: python3 tests/check_parental.py
+      - name: Verify staged system installer without system changes
+        run: python3 tests/check_parental_installer.py

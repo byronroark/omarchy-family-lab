@@ -21,7 +21,7 @@ Do not open a public issue containing credentials, exploitable personal configur
 - The helper desktop account trusts its local code, queue and config. Other local processes under that same account are not isolated from these files.
 - No router forwarding, public SSH exposure or Docker socket sharing. Check IPv6 and the active firewall rather than assuming IPv4 rules cover everything.
 
-The prototype does not provide content filtering, screen-time controls, browser visibility, parent approval authentication, application sandboxing or comprehensive parental controls. Notification cooldowns are not SSH denial-of-service protection. Removing a key prevents new sessions but does not terminate existing ones.
+The assistance prototype does not itself provide parental enforcement or browser visibility. The separate optional policy module adds experimental time enforcement and scoped Chromium rules only after explicit system enrollment; it is not a comprehensive content filter or application sandbox. Notification cooldowns are not SSH denial-of-service protection. Removing a key prevents new sessions but does not terminate existing ones.
 
 ## Public repository hygiene
 
@@ -30,3 +30,9 @@ Only synthetic examples belong in Git. Keep runtime state, SSH directories, cred
 ## Optional reporting boundary
 
 The reporting executable is disabled by default on learners. Imported observations are user-owned and not tamper-resistant. Report retrieval requires separately enrolled report-only forced-command keys; assistance credentials do not grant it. Reports are private files, not an encrypted archive; retention cleanup and access audit are not implemented. LocalSend is an explicit interactive export, not parent authentication. Remote Markdown must be viewed with active content and external resource loading disabled. See [reporting limitations](docs/REPORTING.md).
+
+## Optional privileged policy module
+
+Review [the policy trust model and deployment gates](docs/PARENTAL_CONTROLS.md) before installation. The service is root-owned, uses a parent-only Unix socket plus SO_PEERCRED UID authorization, accepts a fixed bounded schema, and cannot receive commands or remote subject enrollment. Dedicated parent transport accounts/keys are distinct from help/admin accounts. Parent account processes and root are trusted. The standard child must lack every elevation path; UID reuse, wheel recovery exemptions, custom PAM bypasses and mutable system time require local audit.
+
+PAM and session termination can deny login or discard work. Keep a verified parent recovery console and USB; never remove a helper executable while its PAM hook remains. Missing/stale health blocks new enforced-child logins; it does not guarantee existing jobs were terminated after a service failure. Chromium policies are machine-wide and bypassable through unsupported applications; inspect policy recognition, scope/conflicts and refresh on the actual release. Root-owned sampled time totals are not evidence of attention, app use or website visits. No live enforcement installation or complete security audit has been performed.

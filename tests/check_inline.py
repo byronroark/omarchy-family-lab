@@ -36,6 +36,13 @@ with tempfile.TemporaryDirectory() as directory, contextlib.redirect_stdout(io.S
     ctx['ui_heartbeat']()  # Simulate the plugin confirming successful load/render readiness.
     row = state['requests'][0]
     assert row['message'] == request['message']
+    assert ctx['peer_label']('learner-a', {'peer_labels': {'learner-a': 'Alex Rivera'}}) == 'Alex Rivera (learner-a)'
+    assert ctx['peer_label']('alex', {}) == 'alex'
+    try:
+        ctx['peer_label']('alex', {'peer_labels': {'alex': 'bad\nname'}})
+        raise AssertionError('Control character accepted in label')
+    except ValueError:
+        pass
     assert row['actions'] == [{'kind': 'open', 'label': 'Open terminal'},
                              {'kind': 'forward', 'label': 'Ask Mom', 'target': 'mom'},
                              {'kind': 'dismiss', 'label': 'Dismiss'}]

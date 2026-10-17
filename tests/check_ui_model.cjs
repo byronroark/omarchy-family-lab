@@ -25,3 +25,6 @@ for (const change of [{version: 2}, {enabled: 'true'}, {paused: null}, {requests
     assert.throws(() => model.parse(JSON.stringify({...data, ...change})));
 assert.throws(() => model.parse(JSON.stringify({...data, requests: [{...data.requests[0], actions: [{kind: 'control', label: 'Approve'}]}]})));
 console.log('PASS: UI schema, fixed argv actions, no approval/admin/exec actions, bad targets and paused/disabled states');
+
+assert.equal(model.parse(JSON.stringify({...data, requests: [{...data.requests[0], name: 'Alex Rivera (learner-a)'}]})).requests[0].name, 'Alex Rivera (learner-a)');
+assert.throws(() => model.parse(JSON.stringify({...data, requests: [{...data.requests[0], name: 123}]})));

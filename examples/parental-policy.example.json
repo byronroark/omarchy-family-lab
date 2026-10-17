@@ -1,0 +1,73 @@
+{
+  "revision": 0,
+  "policy": {
+    "schema": 1,
+    "timezone": "UTC",
+    "subjects": {
+      "study-pc": {
+        "name": "study-pc",
+        "mode": "off",
+        "daily_minutes": {
+          "mon": 90,
+          "tue": 90,
+          "wed": 90,
+          "thu": 90,
+          "fri": 90,
+          "sat": 90,
+          "sun": 90
+        },
+        "hours": {
+          "mon": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "tue": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "wed": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "thu": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "fri": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "sat": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ],
+          "sun": [
+            [
+              "08:00",
+              "20:00"
+            ]
+          ]
+        },
+        "grace_seconds": 120,
+        "browser": {
+          "enabled": false,
+          "blocked": [],
+          "allowed": [],
+          "safe_search": false
+        }
+      }
+    }
+  }
+}
