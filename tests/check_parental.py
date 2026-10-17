@@ -85,6 +85,42 @@ class PolicyTests(unittest.TestCase):
             self.engine.request(2103,{'op':'pause','peer':'alex','minutes':1})
         self.assertFalse(self.engine.tick({2101},night+30,10,35)['alex']['blocked'])
         self.assertTrue(self.engine.tick({2101},night+61,11,66)['alex']['blocked'])
+    def test_bedtime_today_parent_only_midnight_persistence_and_daily_limit(self):
+        (self.etc/'pam-ready').touch();self.apply('enforce',60)
+        night = self.now + 12*3600
+        self.rejected({'op':'bedtime-today','peer':'alex','enabled':True},2101)
+        self.rejected({'op':'bedtime-today','peer':'alex','enabled':'yes'})
+        with patch.object(m.time,'time',return_value=night),patch.object(m,'boottime',return_value=10):
+            self.engine.request(2103,{'op':'bedtime-today','peer':'alex','enabled':True})
+        row=self.engine.tick(set(),night,0,10)['alex']
+        self.assertFalse(row['blocked']);self.assertTrue(row['bedtime_skipped_today'])
+        self.assertIsNotNone(m.next_allowed(self.engine.current['policy'],self.engine.state,'alex',night))
+        self.engine=m.Engine(self.etc,self.data,self.runtime)
+        self.assertTrue(self.engine.tick(set(),night+60,0,70)['alex']['bedtime_skipped_today'])
+        self.engine.state['days']['2026-01-05']['alex']=3600
+        self.assertEqual(self.engine.tick(set(),night+60,0,70)['alex']['reason'],'daily-limit')
+        row=self.engine.tick(set(),night+2*3600,0,7210)['alex']
+        self.assertFalse(row['bedtime_skipped_today']);self.assertEqual(row['reason'],'outside-hours')
+        # No automatic repeat the following evening.
+        self.assertTrue(self.engine.tick(set(),night+86400,0,86410)['alex']['blocked'])
+
+    def test_bedtime_today_cancel_timezone_change_and_dst_midnight(self):
+        (self.etc/'pam-ready').touch();self.apply('enforce',60)
+        policy=copy.deepcopy(self.engine.current['policy']);policy['timezone']='America/New_York'
+        self.engine.request(2102,{'op':'apply','base_revision':1,'policy':policy})
+        # Spring-forward day has 23 hours, not a rolling 24-hour exception.
+        start=m.dt.datetime(2026,3,8,tzinfo=m.ZoneInfo('America/New_York')).timestamp()
+        with patch.object(m.time,'time',return_value=start),patch.object(m,'boottime',return_value=0):
+            result=self.engine.request(2102,{'op':'bedtime-today','peer':'alex','enabled':True})
+        self.assertEqual(result['expires']-start,23*3600)
+        self.assertTrue(self.engine.tick(set(),start,0,0)['alex']['bedtime_skipped_today'])
+        self.engine.current['policy']['timezone']='UTC'
+        self.assertFalse(self.engine.tick(set(),start,0,0)['alex']['bedtime_skipped_today'])
+        self.engine.current['policy']['timezone']='America/New_York'
+        with patch.object(m.time,'time',return_value=start):
+            self.engine.request(2103,{'op':'bedtime-today','peer':'alex','enabled':False})
+        self.assertFalse(self.engine.tick(set(),start,0,0)['alex']['bedtime_skipped_today'])
+
     def test_schema_browser_boundaries(self):
         for change in ({'grace_seconds':0},{'daily_minutes':{'mon':True}},{'hours':{d:[['22:00','08:00']] for d in m.DAYS}}):
             policy=m.defaults(['alex']);policy['subjects']['alex'].update(change)

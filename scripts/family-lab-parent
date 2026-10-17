@@ -86,10 +86,16 @@ def menu(peer):
             print('BROWSER ERROR: '+snapshot['browser_error'])
         print('1 Daily allowance   2 Allowed hours   3 Mode   4 Add 15 minutes   5 Add 30 minutes')
         print('6 Pause time 15 min  7 Browser rules  8 Undo settings  9 Save time report  10 Allow site 15 min  0 Exit')
+        print('11 Skip bedtime today   12 Restore bedtime today')
+        if snapshot['status'].get(peer, {}).get('bedtime_skipped_today'):
+            print('Bedtime skipped TODAY ONLY; expires at midnight in the child timezone. Daily allowance still applies.')
         action=input('Choose: ').strip()
         try:
             if action=='0':
                 return
+            if action in ('11','12'):
+                print(ask(peer,{'op':'bedtime-today','peer':peer,'enabled':action=='11'}))
+                continue
             if action in ('4','5','6'):
                 print(ask(peer,{'op':'pause' if action=='6' else 'extra','peer':peer,'minutes':30 if action=='5' else 15}))
                 continue

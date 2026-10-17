@@ -131,6 +131,14 @@ def validate(policy, enrolled, browsers=()):
         raise ValueError('Browser policies are machine-wide; use at most one browser profile per PC')
     return policy
 
+def bedtime_skipped(policy, usage, peer, now, boot, elapsed):
+    grant = usage.get('bedtime', {}).get(peer)
+    if not grant or grant['timezone'] != policy['timezone']:
+        return False
+    day = dt.datetime.fromtimestamp(now, ZoneInfo(policy['timezone'])).date().isoformat()
+    return (grant['day'] == day and day >= max(usage['days'], default=day)
+            and alive({key: grant[key] for key in ('expires', 'boot', 'deadline')}, now, boot, elapsed))
+
 def next_allowed(policy, usage, peer, now):
     """Forecast the next policy-permitted minute; never invent a reopening time."""
     zone = ZoneInfo(policy['timezone'])
@@ -139,6 +147,7 @@ def next_allowed(policy, usage, peer, now):
         return None
     high = max(usage['days'], default='0001-01-01')
     candidate = now
+    forecast_boot, forecast_elapsed = boot_id(), boottime()
     # Iterate real UTC minutes so DST gaps/folds match the daemon's local-time evaluation.
     for step in range(8*24*60+1):
         local = dt.datetime.fromtimestamp(candidate, zone)
@@ -147,7 +156,7 @@ def next_allowed(policy, usage, peer, now):
         used = usage['days'].get(counter_day, {}).get(peer, 0)
         limit = item['daily_minutes'][DAYS[local.weekday()]]*60 + usage['grants'].get(counter_day+'/'+peer, 0)*60
         minutes = local.hour*60+local.minute
-        if used < limit and any(minute(a) <= minutes < minute(b) for a,b in item['hours'][DAYS[local.weekday()]]):
+        if used < limit and (bedtime_skipped(policy, usage, peer, candidate, forecast_boot, forecast_elapsed+candidate-now) or any(minute(a) <= minutes < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])):
             return {'at': candidate, 'label': local.strftime('%a %Y-%m-%d %H:%M %Z'),
                     'timezone': policy['timezone']}
         candidate = (int(candidate)//60+1)*60
@@ -189,6 +198,16 @@ def usage_valid(value):
     for key, minutes in value['grants'].items():
         day, peer = key.split('/',1)
         dt.date.fromisoformat(day);identifier(peer);integer(minutes,0,1440)
+    bedtime = value.get('bedtime', {})
+    if not isinstance(bedtime, dict):
+        raise ValueError('Invalid bedtime exceptions')
+    for peer, grant in bedtime.items():
+        identifier(peer)
+        if not isinstance(grant, dict) or set(grant) != {'day','timezone','expires','boot','deadline'}:
+            raise ValueError('Invalid bedtime exception')
+        dt.date.fromisoformat(grant['day']); ZoneInfo(grant['timezone'])
+        timer = {key: grant[key] for key in ('expires','boot','deadline')}
+        usage_valid({'days': {}, 'grants': {}, 'pauses': {'timer': timer}, 'blocked_since': {}})
     for key in ('pauses','blocked_since','sites'):
         for timer in value.get(key,{}).values():
             if not isinstance(timer,dict) or set(timer) != {'expires','boot','deadline'} or not isinstance(timer['boot'],str):
@@ -293,6 +312,28 @@ class Engine:
                 self.state['sites'][domain] = {'expires': time.time()+minutes*60, 'boot': self.boot, 'deadline': boottime()+minutes*60}
                 atomic(self.data / 'usage.json', self.state)
                 return {'accepted': True, 'note': 'Managed browser refresh/restart may be required.'}
+            if op == 'bedtime-today' and set(req) == {'op', 'peer', 'enabled'}:
+                peer = identifier(req['peer'])
+                if peer not in self.config['subjects'] or type(req['enabled']) is not bool:
+                    raise ValueError('Expected enrolled subject and boolean enabled')
+                now = time.time()
+                zone = ZoneInfo(self.current['policy']['timezone'])
+                local = dt.datetime.fromtimestamp(now, zone)
+                tomorrow = local.date() + dt.timedelta(days=1)
+                end = dt.datetime.combine(tomorrow, dt.time(), tzinfo=zone).timestamp()
+                self.audit(who, op, {'peer': peer, 'enabled': req['enabled'], 'day': local.date().isoformat()})
+                updated = copy.deepcopy(self.state)
+                grants = updated.setdefault('bedtime', {})
+                if req['enabled']:
+                    grants[peer] = {'day': local.date().isoformat(), 'timezone': str(zone),
+                                   'expires': end, 'boot': self.boot, 'deadline': boottime()+end-now}
+                else:
+                    grants.pop(peer, None)
+                atomic(self.data / 'usage.json', updated)
+                self.state = updated
+                self.generation += 1
+                return {'accepted': True, 'enabled': req['enabled'], 'expires': end if req['enabled'] else None,
+                        'note': 'Allowed hours skipped until local midnight only. Daily allowance and browser rules still apply.'}
             if op in ('extra', 'pause') and set(req) == {'op', 'peer', 'minutes'}:
                 peer = identifier(req['peer'])
                 if peer not in self.config['subjects']:
@@ -334,7 +375,8 @@ class Engine:
                     day[peer] = used
                 allowance = item['daily_minutes'][DAYS[local.weekday()]]*60 + self.state['grants'].get(counter_day+'/'+peer, 0)*60
                 mins = local.hour*60+local.minute
-                in_hours = any(minute(a) <= mins < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])
+                skip_bedtime = bedtime_skipped(self.current['policy'], self.state, peer, now, self.boot, elapsed)
+                in_hours = skip_bedtime or any(minute(a) <= mins < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])
                 paused = alive(self.state['pauses'].get(peer), now, self.boot, elapsed)
                 reason = 'outside-hours' if not in_hours else 'daily-limit' if used >= allowance else ''
                 blocked = item['mode'] == 'enforce' and bool(reason) and not paused
@@ -350,6 +392,7 @@ class Engine:
                     'day': counter_day, 'used_seconds': round(used), 'remaining_seconds': max(0, round(allowance-used)),
                     'would_block': bool(reason), 'reason': reason, 'blocked': blocked,
                     'grace_seconds': None if grace_left is None else round(grace_left), 'paused': paused,
+                    'bedtime_skipped_today': skip_bedtime,
                     'logged_in': enrollment['uid'] in active,
                     'next_allowed': next_allowed(self.current['policy'], self.state, peer, now) if blocked else None}
             # Retain 30 daily totals; detailed browsing/application data is never collected here.

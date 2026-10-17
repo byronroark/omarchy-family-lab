@@ -29,7 +29,7 @@ The child PC is the authority; parents can be offline without changing saved rul
 - `/run/family-lab/status.json`: local-readable time/status summary, no site history or secrets. May include all enrolled subjects on this machine. Parents should use authenticated get for remote status.
 - `/etc/family-lab/gate.json`: minimal persistent enforcement enrollment; active verdicts require a fresh status from the same boot. Never edit it as an ordinary learner.
 
-A parent cannot remotely enroll another system UID or submit commands, filesystem paths, URLs, shell code or browser policy keys. Allowed operations are get, summary, history, apply, undo, extra, pause and allow-site. Policies must match locally enrolled IDs and a strict schema. A submitted policy is limited to 32 KiB. Root administrators remain fully trusted and can recover locally.
+A parent cannot remotely enroll another system UID or submit commands, filesystem paths, URLs, shell code or browser policy keys. Allowed operations are get, summary, history, apply, undo, extra, pause, bedtime-today and allow-site. Policies must match locally enrolled IDs and a strict schema. A submitted policy is limited to 32 KiB. Root administrators remain fully trusted and can recover locally.
 
 ## Time semantics and failure behavior
 
@@ -168,3 +168,9 @@ Only after those deployment gates pass should the family installation guide be r
 ## Dino experience under development
 
 See [DINO_FLOW.md](DINO_FLOW.md). The design preview and next-session forecast are implemented; the protected login/resume guard, learner action channel and actual hibernation end action are not. Existing enforcement still terminates sessions. Do not deploy it expecting the proposed work-preserving Dino experience.
+
+## Skip bedtime for today
+
+From either enrolled parent's PC, open the parent menu and choose **Skip bedtime today**. This skips all allowed-hours restrictions for that learner for the current calendar day, until midnight in the child's configured policy timezone. The daily allowance, browser rules and other controls remain active. Use **Restore bedtime today** to cancel early. Tomorrow requires a new parent request; nothing repeats automatically. This is not a rolling 24-hour pause.
+
+The exception is stored privately on the child's PC, survives service restart, and is audited with the parent identity. Status includes `bedtime_skipped_today`. Only an authenticated enrolled parent or local root may issue `bedtime-today`; the learner cannot approve it. Changing the policy timezone invalidates the exception. It uses both the calendar date and an expiry deadline, including across suspend. The normal weekly schedule is never edited.
