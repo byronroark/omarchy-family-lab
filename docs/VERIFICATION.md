@@ -8,6 +8,8 @@ Routing tests cover direct Dad/Mom selection, legacy Dad-only fallback, scoped r
 
 The installed Zenity help was checked for extra buttons and plain-text question dialogs. The inspected Omarchy notification service invokes the native command/default action and its card does not render extra action buttons, so routing uses a click-through menu.
 
+The inline service was checked against installed Omarchy 4.0.4-1 / Quickshell 0.3.1 source/APIs. Backend tests cover DND, action restrictions, renderer health, dismissal/retry and native recovery; JavaScript contract tests reject arbitrary command/control/admin actions. Actual installed theme/UI components rendered synthetic dark/light cards offscreen with busy/expired guards, action dispatch, focus, larger text and long-message bounds. An isolated real Wayland check loaded a visible synthetic popup successfully. Neither visual check installs the plugin or contacts another PC. The offscreen check does not validate layer-shell behavior; the Wayland smoke check does not validate full host injection, live theme switching or remote transport.
+
 No supported release or full multi-PC acceptance result is claimed. SSH restrictions, authenticated transport across real hosts, notification click behavior, sleep/logout/reboot and application privileges require deployment-specific checks.
 
 ## Deployment acceptance template
@@ -31,6 +33,7 @@ Record sanitized pass/fail/version results, never hostnames, usernames, fingerpr
 | Optional control key restrictions and correct peer | Pending |
 | Local consent, visible status, revoke during foreground work | Pending on deployed PCs |
 | Expiry, reconnect, supervisor failure, suspend/resume | Pending on deployed PCs |
+| Inline plugin install/host injection, live theme/font switch, DND and fallback | Pending on deployed PCs |
 
 ## Primary references
 
@@ -41,4 +44,4 @@ Record sanitized pass/fail/version results, never hostnames, usernames, fingerpr
 - [Zenity upstream source](https://github.com/GNOME/zenity): question dialogs and extra-button behavior; validate installed options and GUI behavior.
 - [Desktop notifications specification](https://specifications.freedesktop.org/notification/latest-single/): action support varies by server; the prototype uses a native Omarchy-specific adapter.
 
-No official plugin compatibility is claimed until a real plugin is packaged and tested against a declared supported loader/API version.
+The repository now packages an experimental plugin with an inspected API baseline. This is not a general compatibility certification or official Omarchy endorsement; additional releases and end-to-end deployments require their own acceptance tests.

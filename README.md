@@ -2,14 +2,15 @@
 
 Visible, consent-based terminal assistance for Omarchy PCs on a trusted local network.
 
-**Experimental community project.** Not an official Omarchy plugin, not affiliated with or endorsed by the Omarchy maintainers, and not yet validated as a complete multi-PC deployment. The current implementation is a small command-line prototype; a shell plugin is a future milestone.
+**Experimental community shell plugin and CLI.** Not an official Omarchy plugin, not affiliated with or endorsed by the Omarchy maintainers, and not yet validated as a complete multi-PC deployment. The optional inline interface initially targets the inspected Omarchy 4.0 plugin APIs; the native notification/menu backend remains the default.
 
 ## What it does
 
 - A learner starts a dedicated tmux learning terminal.
 - `ask-dad "Could you help explain this?"` or `ask-mom "Could you help explain this?"` sends a bounded message over independent authenticated SSH routes.
-- Dad can click his notification, then **Ask Mom**, to forward the same live help request using a separately enrolled relay key. Mom receives the learner identity marked **via dad**.
-- Each helper receives an Omarchy desktop notification. When forwarding is configured, its click opens an **Open terminal / Ask Mom / Close** menu; otherwise it opens the read-only terminal directly.
+- Dad can click **Ask Mom** on an inline card (or in the native click-through menu), to forward the same live help request using a separately enrolled relay key. Mom receives the learner identity marked **via dad**.
+- Optional [themed inline cards](docs/INLINE_UI.md) show **Open terminal**, **Ask Mom** and **Dismiss** directly in a compact monospace interface, using the desktop’s live theme.
+- The default native backend remains available: clicking its notification opens **Open terminal / Ask Mom / Close** when forwarding is configured, or the read-only terminal directly otherwise.
 - A separate restricted viewing key attaches read-only. The learner can end sharing and disconnect viewers.
 - Optional [consented control](docs/CONTROL.md) uses another key, local approval for each connection, a red status indicator, a five-minute maximum grant and a learner revoke shortcut.
 
@@ -36,7 +37,8 @@ Each learner uses a generic configured peer ID such as `learner-a`. Multiple lea
 3. Use the [operations guide](docs/OPERATIONS.md) for normal sessions, recovery and removal.
 4. For optional hands-on help, read [consented control](docs/CONTROL.md) and enroll a separate control key.
 5. Enroll multiple helpers and optional request forwarding with [ROUTING.md](docs/ROUTING.md).
-6. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
+6. For inline buttons and desktop theme integration, follow [INLINE_UI.md](docs/INLINE_UI.md).
+7. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
 
 No curl-to-shell installer, automatic account creation, driver changes, firewall edits or SSH policy changes are provided. Do not run the user installer as root. No default keyboard shortcuts or monitor layouts are changed.
 
@@ -44,9 +46,15 @@ No curl-to-shell installer, automatic account creation, driver changes, firewall
 
 **Closing or detaching the terminal does not end sharing.** `family-lab stop` ends the dedicated tmux server, disconnects viewers and ends its running jobs. Never type secrets or perform privileged work in a shared terminal.
 
+Synthetic previews using example palettes; the running plugin follows the active desktop theme:
+
+![Inline request card, dark palette](docs/images/inline-dark.png)
+
+![Inline request card, light palette](docs/images/inline-light.png)
+
 ## Development and plugin direction
 
-See [contributing](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). Routing/session logic and their fixed local actions stay separate from the desktop adapter so a future shell plugin can provide visible sharing status and request controls without handling admin credentials.
+See [contributing](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). Routing/session logic and their fixed local actions stay separate from the desktop adapter so the current experimental shell plugin can present request actions without handling admin credentials. Broader sharing-state integration and upstream acceptance remain future work.
 
 Published material must contain synthetic examples only. Never contribute private keys, personal configuration, household details, logs, chat transcripts, screenshots with personal information, or hardware inventories.
 

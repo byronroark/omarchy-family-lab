@@ -6,5 +6,6 @@
   "view_aliases": {},
   "control_aliases": {},
   "forward_routes": {},
-  "relay_sources": {}
+  "relay_sources": {},
+  "notification_backend": "native"
 }

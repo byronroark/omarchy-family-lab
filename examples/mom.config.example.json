@@ -1,7 +1,14 @@
 {
   "notify_aliases": {},
-  "view_aliases": {"learner-a": "family-learner-a-view"},
+  "view_aliases": {
+    "learner-a": "family-learner-a-view"
+  },
   "control_aliases": {},
   "forward_routes": {},
-  "relay_sources": {"dad": ["learner-a"]}
+  "relay_sources": {
+    "dad": [
+      "learner-a"
+    ]
+  },
+  "notification_backend": "native"
 }

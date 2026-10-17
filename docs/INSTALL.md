@@ -112,6 +112,10 @@ The notification/viewing workflow remains read-only. For local approval, bounded
 
 For direct `ask-mom` requests and a clickable **Ask Mom** forwarding choice on Dad’s side, follow [ROUTING.md](ROUTING.md). It adds independent notification destinations, each helper’s own viewing/control keys, and a separately scoped Dad-to-Mom relay key. No reciprocal access, administrator privileges or control approvals are automatic.
 
-## 9. Application choices
+## 9. Optional themed inline UI
+
+The [inline plugin guide](INLINE_UI.md) covers installing and enabling the reviewed service, switching the helper’s local `notification_backend` to `inline`, DND, fallback and compatibility tests. The default remains `native`; installing the QML plugin does not install the CLI, enroll keys or approve control. Keep the visible watcher running for fallback.
+
+## 10. Application choices
 
 Steam, AI tutors, coding agents, graphics drivers and other plugins are outside the core installation. Verify their own supported versions, licenses, account eligibility and security boundaries separately. Do not give a child a privileged coding agent or Docker socket; prompts are not parent authentication. Adults can administer their own apps, but should keep privileged work and secrets out of any shared terminal. Do not install unidentified plugin repositories or claim compatibility based only on a name.
