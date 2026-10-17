@@ -31,6 +31,7 @@ Generate independent Ed25519 keys using `ssh-keygen -t ed25519 -f <new-absolute-
 | Private-key owner | Purpose | Server account |
 |---|---|---|
 | Helper | Separate read-only view key per learner | That learner’s local account |
+| Helper, optional | Separate consented-control key per learner | That learner’s local account |
 | Each learner | Dedicated notification-only key | Helper’s desktop account |
 | Authorized administrator, optional | Administration with passphrase | Separate explicitly authorized admin account |
 
@@ -102,6 +103,10 @@ Show the learner `tmux -L family-lab list-clients` to inspect attached clients. 
 
 **Gate:** verify the correct learner opens, helper typing/paste cannot control the shell, stop disconnects viewers, and sharing cannot resume until the learner starts it again. Test missing agents, changed/unknown host keys, offline hosts, cooldown, malformed input, stale requests, notification failure, logout and reboot. Record results without identifying data. A working manual SSH view does not prove clickable notifications work.
 
-## 7. Application choices
+## 7. Optional control enrollment
+
+The notification/viewing workflow remains read-only. For local approval, bounded hands-on input and a revoke shortcut, follow [CONTROL.md](CONTROL.md). Use a fourth key role, a new forced `control` command and an explicit `control_aliases` mapping. Existing installations remain read-only until deliberately enrolled. No administrator rights are granted by the feature.
+
+## 8. Application choices
 
 Steam, AI tutors, coding agents, graphics drivers and other plugins are outside the core installation. Verify their own supported versions, licenses, account eligibility and security boundaries separately. Do not give a child a privileged coding agent or Docker socket; prompts are not parent authentication. Adults can administer their own apps, but should keep privileged work and secrets out of any shared terminal. Do not install unidentified plugin repositories or claim compatibility based only on a name.

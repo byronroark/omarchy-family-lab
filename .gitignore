@@ -25,3 +25,4 @@ logs/
 *.core
 *.pcap*
 .DS_Store
+/work/

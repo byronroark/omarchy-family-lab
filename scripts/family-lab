@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Family Lab: explicit tmux sharing and SSH-authenticated desktop requests."""
-import fcntl, html, json, os, pathlib, re, select, shutil, subprocess, sys, time, uuid
+import contextlib, ctypes, fcntl, html, json, os, pathlib, re, select, shlex, shutil, signal, subprocess, sys, time, uuid
 os.umask(0o077)
 HOME = pathlib.Path.home()
 STATE = HOME / '.local/state/family-lab'
 CONFIG = HOME / '.config/family-lab/config.json'
 TMUX = ['tmux', '-L', 'family-lab', '-f', '/dev/null']
+CONTROL = STATE / 'control.json'
+MAX_CONTROL_SECONDS = 300
+REQUEST_SECONDS = 60
 def run(args, **kw):
     return subprocess.run(args, check=True, **kw)
 def config():
@@ -41,9 +44,186 @@ def read_request():
     if not isinstance(request, dict) or set(request) != {'message'}:
         raise ValueError('Expected an object containing only message')
     return message(request['message'])
+
+def tmux(*args, check=True):
+    result = subprocess.run(TMUX + list(args), capture_output=True, text=True)
+    if check and result.returncode:
+        raise ValueError('tmux: ' + result.stderr.strip())
+    return result
+
+@contextlib.contextmanager
+def control_state_lock():
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / 'control-state.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+def save_control(record):
+    temp = STATE / 'control.tmp'
+    temp.write_text(json.dumps(record))
+    temp.replace(CONTROL)
+
+def control_clock():
+    # Linux BOOTTIME includes suspend, so sleeping does not extend approval.
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+def process_identity(pid):
+    boot = pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+    # Field 22 is starttime; split after comm, which may contain spaces.
+    start = pathlib.Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[19]
+    return [boot, start]
+
+def control_client(record):
+    # Both PID and client name must match the specific supervised connection.
+    try:
+        if record.get('process_identity') != process_identity(record['pid']):
+            return False
+    except FileNotFoundError:
+        return False
+    clients = tmux('list-clients', '-F', '#{client_pid}\t#{client_name}\t#{client_session}', check=False)
+    expected = [str(record['pid']), record['client'], 'learning']
+    return any(line.split('\t') == expected for line in clients.stdout.splitlines())
+
+def control_indicator(mode):
+    labels = {
+        'pending': '#[bg=yellow,fg=black,bold] CONTROL REQUEST: allow-control to approve #[default]',
+        'active': '#[bg=red,fg=white,bold] HELPER CAN TYPE | Ctrl+b Ctrl+r: revoke #[default]',
+        'off': '#[fg=green] HELP VIEW ONLY #[default]',
+    }
+    tmux('set-option', '-t', 'learning', 'status', 'on')
+    tmux('set-option', '-t', 'learning', 'status-right-length', '100')
+    tmux('set-option', '-t', 'learning', 'status-right', labels[mode])
+
+def revoke_locked():
+    if CONTROL.exists():
+        record = json.loads(CONTROL.read_text())
+        if control_client(record):
+            # Remove write permission before detaching, serialized with approval.
+            tmux('refresh-client', '-t', record['client'], '-f', 'read-only', check=False)
+            tmux('detach-client', '-t', record['client'], check=False)
+        CONTROL.unlink(missing_ok=True)
+    if tmux('has-session', '-t', '=learning', check=False).returncode == 0:
+        control_indicator('off')
+
+def require_local_confirmation():
+    if not sys.stdin.isatty() or os.environ.get('SSH_CONNECTION') or os.environ.get('SSH_TTY'):
+        raise ValueError('Approve from a local interactive terminal on the learner PC')
+
+def allow_control(args):
+    require_local_confirmation()
+    if len(args) > 1:
+        raise ValueError('Usage: family-lab allow-control [seconds, 1–300]')
+    seconds = int(args[0]) if args else MAX_CONTROL_SECONDS
+    if not 1 <= seconds <= MAX_CONTROL_SECONDS:
+        raise ValueError('Approval must last 1–300 seconds')
+    with control_state_lock():
+        record = json.loads(CONTROL.read_text()) if CONTROL.exists() else None
+        if not record or record['phase'] != 'pending' or not control_client(record):
+            raise ValueError('No pending helper control connection')
+        request_id = record['id']
+        print('A holder of your enrolled CONTROL key wants to type in this learning terminal.\n'
+              'They can run commands and change files as your account. Only approve someone you trust.\n'
+              'Do not enter passwords or use sudo here. Stop: Ctrl+b then Ctrl+r, or family-lab revoke-control.')
+    if input(f'Allow this connection for {seconds} seconds? Type yes: ').strip() != 'yes':
+        with control_state_lock():
+            if CONTROL.exists() and json.loads(CONTROL.read_text())['id'] == request_id:
+                revoke_locked()
+        print('Control declined.')
+        return
+    with control_state_lock():
+        record = json.loads(CONTROL.read_text()) if CONTROL.exists() else None
+        if (not record or record['id'] != request_id or record['phase'] != 'pending'
+                or control_clock() >= record['deadline'] or not control_client(record)):
+            raise ValueError('Request ended or expired; request and approve again')
+        record['phase'] = 'approved'
+        record['deadline'] = control_clock() + seconds
+        save_control(record)
+    print('This connection approved. Red status indicates when the helper can type.')
+
+def child_guard(parent_pid):
+    # Linux: kill the tmux client even if its consent supervisor dies abruptly.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(1, int(signal.SIGKILL), 0, 0, 0) != 0:  # PR_SET_PDEATHSIG
+        os._exit(1)
+    if os.getppid() != parent_pid:
+        os._exit(1)
+
+def control_connection():
+    if not sys.stdin.isatty():
+        raise ValueError('Control requires an interactive SSH PTY')
+    tmux('has-session', '-t', '=learning')
+    STATE.mkdir(parents=True, exist_ok=True)
+    # One request/connection only. A reconnect always requires fresh approval.
+    with (STATE / 'control-connection.lock').open('a') as connection_lock:
+        try:
+            fcntl.flock(connection_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('A control request/connection already exists') from None
+        print('Waiting for local learner approval; input is read-only until approved.\n'
+              'Approval expires after at most five minutes. No automatic reconnect approval.', flush=True)
+        parent_pid = os.getpid()
+        proc = None
+        request_id = uuid.uuid4().hex
+        try:
+            with control_state_lock():
+                revoke_locked()  # Clear any stale prior connection/indicator.
+                control_indicator('pending')
+            proc = subprocess.Popen(TMUX + ['attach-session', '-r', '-E', '-t', '=learning'],
+                                    preexec_fn=lambda: child_guard(parent_pid))
+            attach_deadline = time.monotonic() + 5
+            while True:
+                clients = tmux('list-clients', '-F', '#{client_pid}\t#{client_name}', check=False)
+                matches = [line.split('\t')[1] for line in clients.stdout.splitlines()
+                           if line.split('\t')[0] == str(proc.pid)]
+                if matches:
+                    break
+                if proc.poll() is not None or time.monotonic() >= attach_deadline:
+                    raise ValueError('Control client did not attach')
+                time.sleep(0.05)
+            with control_state_lock():
+                save_control({'id': request_id, 'pid': proc.pid, 'client': matches[0],
+                              'process_identity': process_identity(proc.pid),
+                              'phase': 'pending', 'deadline': control_clock() + REQUEST_SECONDS})
+            while proc.poll() is None:
+                with control_state_lock():
+                    if not CONTROL.exists():
+                        break
+                    record = json.loads(CONTROL.read_text())
+                    if (record['id'] != request_id or control_clock() >= record['deadline']
+                            or not control_client(record)):
+                        break
+                    if record['phase'] == 'approved':
+                        # Visible warning must be configured before enabling input.
+                        control_indicator('active')
+                        tmux('switch-client', '-c', record['client'], '-E', '-r', '-t', '=learning')
+                        record['phase'] = 'active'
+                        save_control(record)
+                time.sleep(0.05)
+        finally:
+            try:
+                with control_state_lock():
+                    if CONTROL.exists() and json.loads(CONTROL.read_text())['id'] == request_id:
+                        revoke_locked()
+                    elif tmux('has-session', '-t', '=learning', check=False).returncode == 0:
+                        control_indicator('off')
+            finally:
+                if proc is not None:
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait()
+
+def setup_learning_controls():
+    # Only the dedicated tmux server: no desktop/global shortcut modifications.
+    revoke = shlex.join([sys.executable, str(pathlib.Path(__file__).resolve()), 'revoke-control'])
+    tmux('bind-key', '-T', 'prefix', 'C-r', 'run-shell', '-b', revoke)
+    with control_state_lock():
+        if not CONTROL.exists():
+            control_indicator('off')
+
 def main():
     if len(sys.argv) < 2:
-        raise ValueError('Commands: install, learn, stop, view, ask, receive PERSON, watch')
+        raise ValueError('Commands: install, learn, stop, view, ask, receive PERSON, watch, '
+                         'assist PEER, control, allow-control [seconds], revoke-control')
     cmd = sys.argv[1]
     if pathlib.Path(sys.argv[0]).name == 'ask-dad':
         cmd = 'ask'
@@ -68,19 +248,41 @@ def main():
         if not CONFIG.exists():
             CONFIG.write_text(json.dumps({'notify_alias':'family-helper-notify',
                 'view_aliases':{'learner-a':'family-learner-a-view',
-                                'learner-b':'family-learner-b-view'}}, indent=2)+'\n')
+                                'learner-b':'family-learner-b-view'},
+                'control_aliases':{}}, indent=2)+'\n')
         print('Installed. Configure SSH aliases; read docs before using.')
     elif cmd == 'learn':
         if os.environ.get('TMUX'):
             raise ValueError('Start from a terminal outside tmux')
         print('Sharing this learning terminal with your helper is available while it runs.\n'
               'Only type things you are comfortable sharing. Use family-lab stop to end sharing.')
-        run(TMUX + ['new-session', '-A', '-s', 'learning'])
+        with control_state_lock():
+            if tmux('has-session', '-t', '=learning', check=False).returncode != 0:
+                tmux('new-session', '-d', '-s', 'learning')
+        setup_learning_controls()
+        run(TMUX + ['attach-session', '-t', '=learning'])
     elif cmd == 'stop':
+        with control_state_lock():
+            revoke_locked()
         run(TMUX + ['kill-server'])
+    elif cmd == 'assist':
+        if len(args) != 1:
+            raise ValueError('Usage: family-lab assist PEER')
+        host = config().get('control_aliases', {}).get(alias(args[0]))
+        if not host:
+            raise ValueError('No separately enrolled control alias for this peer')
+        run(['ssh', '-tt', *ssh_args(host)[1:]])
+    elif cmd == 'control':
+        control_connection()
+    elif cmd == 'allow-control':
+        allow_control(args)
+    elif cmd == 'revoke-control':
+        with control_state_lock():
+            revoke_locked()
+        print('Helper control revoked. Learning session and view-only connections remain.')
     elif cmd == 'view':
         # Forced command: never evaluate SSH_ORIGINAL_COMMAND.
-        os.execvp('tmux', TMUX + ['attach-session', '-r', '-t', '=learning'])
+        os.execvp('tmux', TMUX + ['attach-session', '-r', '-E', '-t', '=learning'])
     elif cmd == 'ask':
         if len(args) != 1:
             raise ValueError('Usage: ask-dad "message"')
