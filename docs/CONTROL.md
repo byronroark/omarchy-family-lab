@@ -1,6 +1,6 @@
 # Optional consented terminal control
 
-The normal help notification still opens a read-only view. Control is an additional, opt-in path with a separate SSH key. It permits editing commands and running them as the learning account after approval on the learner’s PC. It does not grant administrator rights or connect an AI automatically.
+The normal help notification offers read-only viewing, directly or through the optional routing menu. Control is an additional, opt-in path with a separate SSH key. It permits editing commands and running them as the learning account after approval on the learner’s PC. It does not grant administrator rights or connect an AI automatically.
 
 ## Enrollment
 
@@ -11,6 +11,8 @@ Generate a new passphrase-protected **control-only** Ed25519 key on the helper P
 ```text
 from="<helper-source-address>",restrict,pty,command="/home/<learner-login>/.local/bin/family-lab control" <actual-control-public-key-line>
 ```
+
+For distinct helper identities, append a plain helper ID to the forced command, such as `family-lab control dad` or `family-lab control mom`; then the learner sees that enrolled key’s label in the prompt/status. Omitting it keeps the legacy generic Helper label. The label is set by the key enrollment, not the help message. See [ROUTING.md](ROUTING.md).
 
 Use real local values, correct permissions, verified source addresses and the base installation’s SSH/firewall restrictions. Keep this key distinct so it can be removed without disabling read-only assistance. Audit duplicate unrestricted entries. The forced command ignores SSH_ORIGINAL_COMMAND: the key cannot choose `allow-control`, arbitrary commands, SFTP or forwarding.
 
@@ -40,11 +42,11 @@ The above is a fragment inside the existing JSON object. Fresh installs default 
 
 ## A hands-on session
 
-1. Learner runs `family-lab learn` and sends the usual `ask-dad "message"`. Helper opens the read-only notification and discusses the intended change.
+1. Learner runs `family-lab learn` and uses `ask-dad "message"` or `ask-mom "message"` for the intended helper. Helper opens the read-only notification and discusses the intended change.
 2. Helper loads the control key with `ssh-add <absolute-control-private-key-path>` and runs `family-lab assist learner-a` in a separate terminal on their own PC. The ordinary viewer can remain open and stays read-only.
 3. A single control connection attaches **read-only while waiting**. The learning terminal shows a yellow control-request status. It expires after 60 seconds if not approved. There is no writable connection merely because the helper asks.
 4. In the local learning shell, or another local interactive terminal on the learner PC, learner runs `family-lab allow-control`. They read the warning and type exactly `yes`. Any other answer declines and disconnects the request. Piped input and ordinary SSH-based approval are rejected. Approval applies only to this pending connection; a delayed answer cannot approve a newer reconnect.
-5. Once enabled, the learning terminal has a red **HELPER CAN TYPE** status. The helper can edit the shell’s current command line, type commands and interact with terminal programs. Both people share the terminal, so coordinate turns to avoid mixing input. Default approval is five minutes. `family-lab allow-control 60` instead grants one minute; allowed durations are 1–300 seconds.
+5. Once enabled, the learning terminal has a red **HELPER CAN TYPE** status (or the enrolled helper name, such as **MOM CAN TYPE**). The helper can edit the shell’s current command line, type commands and interact with terminal programs. Both people share the terminal, so coordinate turns to avoid mixing input. Default approval is five minutes. `family-lab allow-control 60` instead grants one minute; allowed durations are 1–300 seconds.
 6. To revoke, learner presses **Ctrl+B, then Ctrl+R** inside the learning terminal. This shortcut belongs only to the dedicated tmux server and works while a foreground program is using the shell. Alternatively run `family-lab revoke-control` from another local terminal. The control connection is disconnected; ordinary viewers and the learning session remain. `family-lab stop` ends all sharing and running learning jobs.
 
 A reconnect always starts pending/read-only and requires another approval. Expiry disconnects the control client. Linux boot-time deadlines include suspend; on resume the supervisor revokes an expired grant on its next scheduling pass. Closing/detaching the learner terminal is still not revocation. A stale red indicator after a supervisor crash can be cleared with `family-lab revoke-control`; do not interpret a frozen display as live connection status.

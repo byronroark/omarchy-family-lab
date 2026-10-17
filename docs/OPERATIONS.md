@@ -2,7 +2,7 @@
 
 ## A normal session
 
-Helper starts the visible watcher and loads the appropriate viewing key into their local agent. Learner starts `family-lab learn`, does only agreed learning work, and uses `ask-dad "message"` when assistance is wanted. Helper clicks the notification, explains what they see and suggests steps. The learner types the commands by default. For agreed hands-on assistance, use the separate [consented control workflow](CONTROL.md): helper requests, learner approves locally, red status shows writable control, and Ctrl+B then Ctrl+R revokes it.
+Helper starts the visible watcher and loads the appropriate viewing key into their local agent. Learner starts `family-lab learn`, does only agreed learning work, and uses `ask-dad "message"` or `ask-mom "message"` to select the helper. Helper clicks the notification, opens the terminal directly or through the routing menu, explains what they see and suggests steps. If Dad is busy, **Ask Mom** in that menu forwards the request using the separately enrolled route; it never approves control. See [ROUTING.md](ROUTING.md). The learner types the commands by default. For agreed hands-on assistance, use the separate [consented control workflow](CONTROL.md): helper requests, learner approves locally, red status shows writable control, and Ctrl+B then Ctrl+R revokes it.
 
 For an adult administrator, system changes can be made in their own separate unshared terminal. Helper admin work uses only a separate explicitly authorized account/key. For a child standard account, a parent performs agreed admin tasks separately. Never weaken viewing-key restrictions to make typing easier; optional control has a different key and consent path.
 
@@ -21,6 +21,8 @@ Learner runs `family-lab stop` when finished. This kills the dedicated server an
 | Host key changed | Stop and compare at the physical console. Investigate address reuse/reinstallation before changing known_hosts. |
 | Timeout | Check power/suspend, addresses, route, Wi-Fi isolation, sshd and IPv4/IPv6 firewall rules. No router forwarding. |
 | Wrong peer opens | Stop watcher; inspect fixed receive arguments and view_aliases. Each target must map to the intended host/account/key. |
+| Ask Mom / relay fails | Check the separate direct or relay key, Mom’s watcher, source/learner allowlist and viewing map. Use `family-lab inbox` to find the still-live original request and retry a configured route. Acknowledgement is not a read receipt. |
+| No Ask Mom button | Forwarding needs an explicitly enrolled route and Zenity. The native toast opens a menu; it does not render multiple inline buttons. |
 | Control request/approval fails | Check the separate control alias/key, active learning session, pending connection, local interactive confirmation and installed versions. Do not repurpose a viewing key. |
 | Ordinary viewer controls shell | Stop sharing immediately. Audit actual key used, forced command, unrestricted duplicates and read-only attach. Re-run negative tests. |
 | Still shareable after closing | Closing/detaching is not revocation. Learner runs `family-lab stop` from another local terminal in the same account. |
@@ -32,7 +34,7 @@ Never upload raw logs or inventories to a public issue. If using Omarchy diagnos
 
 Keep OS, terminal, SSH and tmux updated, with local recovery and backups. Re-run acceptance after changes to SSH policy, accounts, addresses, terminal helpers or Omarchy versions. Keep an offline private record of key fingerprints, host enrollment and actual configuration. No record belongs in this public checkout.
 
-Back up learning files and necessary local config securely. The prototype does not record terminal sessions or maintain a durable message history. Other applications may log independently.
+Back up learning files and necessary local config securely. The prototype does not record terminal sessions or maintain a durable message history. Private live help records are retained for up to ten-minute action validity and pruned on command activity; state files can remain while all commands are stopped. Other applications may log independently.
 
 ## Revoke or uninstall
 

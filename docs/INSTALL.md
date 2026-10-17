@@ -32,7 +32,8 @@ Generate independent Ed25519 keys using `ssh-keygen -t ed25519 -f <new-absolute-
 |---|---|---|
 | Helper | Separate read-only view key per learner | That learner’s local account |
 | Helper, optional | Separate consented-control key per learner | That learner’s local account |
-| Each learner | Dedicated notification-only key | Helper’s desktop account |
+| Each learner | Independent notification-only key per helper | That helper’s desktop account |
+| Forwarding helper, optional | Separate relay key per destination/learner | Receiving helper’s desktop account |
 | Authorized administrator, optional | Administration with passphrase | Separate explicitly authorized admin account |
 
 Protect viewing/admin keys with passphrases and a local session agent. Dedicated notification keys may be unattended only when the narrow forced-command restrictions below are applied. Keep `~/.ssh` mode 700 and private keys/config/authorized_keys mode 600, owned by the correct account.
@@ -49,9 +50,9 @@ Review `scripts/family-lab`, then as the intended non-root desktop user on each 
 python3 scripts/family-lab install
 ```
 
-This installs `~/.local/bin/family-lab` and the `ask-dad` symlink, plus `~/.config/family-lab/config.json`. Ensure `~/.local/bin` is on PATH or use absolute paths. The checkout is not needed at runtime.
+This installs `~/.local/bin/family-lab` and the `ask-dad` / `ask-mom` symlinks, plus `~/.config/family-lab/config.json`. Ensure `~/.local/bin` is on PATH or use absolute paths. The checkout is not needed at runtime.
 
-The helper’s local `view_aliases` maps generic peer IDs to fixed local SSH aliases. The example includes `learner-a` and `learner-b`; remove unused mappings or add a plain ID matching `[A-Za-z][A-Za-z0-9_-]{0,63}`. Each learner sets its own `notify_alias` to its notification connection. Never commit completed mappings.
+The helper’s local `view_aliases` maps generic peer IDs to fixed local SSH aliases. The example includes `learner-a` and `learner-b`; remove unused mappings or add a plain ID matching `[A-Za-z][A-Za-z0-9_-]{0,63}`. For the original single-helper setup, the learner sets `notify_alias` for Dad. For multiple helpers, `notify_aliases` explicitly maps `dad` and `mom` to independent notification connections; see [ROUTING.md](ROUTING.md). Mom is not a fallback to Dad. Never commit completed mappings.
 
 ## 5. Forced authorized_keys entries
 
@@ -97,7 +98,7 @@ Inside that learning terminal:
 ask-dad "Could you help explain this?"
 ```
 
-The helper clicks the notification to open that peer’s configured read-only SSH view. `BatchMode=yes` means the key must already be usable without a password prompt. Manually test `ssh -tt family-learner-a-view` if needed.
+With no forwarding route configured, the helper clicks the notification to open that peer’s configured read-only SSH view. With forwarding enrolled, the click opens the routing action menu first. `BatchMode=yes` means the key must already be usable without a password prompt. Manually test `ssh -tt family-learner-a-view` if needed.
 
 Show the learner `tmux -L family-lab list-clients` to inspect attached clients. Helper detaches with Ctrl+B then D. Learner ends sharing with `family-lab stop`, understanding that this ends the server’s running jobs too. Closing or detaching a terminal leaves sharing available. Never rely on logout or suspend to revoke it.
 
@@ -107,6 +108,10 @@ Show the learner `tmux -L family-lab list-clients` to inspect attached clients. 
 
 The notification/viewing workflow remains read-only. For local approval, bounded hands-on input and a revoke shortcut, follow [CONTROL.md](CONTROL.md). Use a fourth key role, a new forced `control` command and an explicit `control_aliases` mapping. Existing installations remain read-only until deliberately enrolled. No administrator rights are granted by the feature.
 
-## 8. Application choices
+## 8. Multiple helpers and request forwarding
+
+For direct `ask-mom` requests and a clickable **Ask Mom** forwarding choice on Dad’s side, follow [ROUTING.md](ROUTING.md). It adds independent notification destinations, each helper’s own viewing/control keys, and a separately scoped Dad-to-Mom relay key. No reciprocal access, administrator privileges or control approvals are automatic.
+
+## 9. Application choices
 
 Steam, AI tutors, coding agents, graphics drivers and other plugins are outside the core installation. Verify their own supported versions, licenses, account eligibility and security boundaries separately. Do not give a child a privileged coding agent or Docker socket; prompts are not parent authentication. Adults can administer their own apps, but should keep privileged work and secrets out of any shared terminal. Do not install unidentified plugin repositories or claim compatibility based only on a name.

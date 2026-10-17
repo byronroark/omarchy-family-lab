@@ -4,5 +4,8 @@
     "learner-a": "family-learner-a-view",
     "learner-b": "family-learner-b-view"
   },
-  "control_aliases": {}
+  "control_aliases": {},
+  "notify_aliases": {},
+  "forward_routes": {},
+  "relay_sources": {}
 }

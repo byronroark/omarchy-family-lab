@@ -4,7 +4,7 @@ This is a community proposal and implementation path, not an acceptance commitme
 
 ## Milestone 1 — auditable CLI prototype (current)
 
-Generic roles, local-only examples, explicit sharing and revocation, restricted SSH transport, desktop notification action, bounded queue, basic tests, staged deployment and documented limits. Optional consented control now adds a separate key, local connection-specific approval, visible status, bounded duration and revocation; its trust model is in CONTROL.md. Full SSH/desktop acceptance remains pending.
+Generic roles, local-only examples, explicit sharing and revocation, restricted SSH transport, desktop notification action, bounded queue, basic tests, staged deployment and documented limits. Optional consented control now adds a separate key, local connection-specific approval, visible status, bounded duration and revocation; its trust model is in CONTROL.md. Multiple helper destinations and one-hop authenticated request forwarding are implemented as an opt-in CLI/notification-menu adapter; ROUTING.md documents its trust boundaries. Full SSH/desktop acceptance remains pending.
 
 ## Milestone 2 — verified multi-PC workflow
 
@@ -12,11 +12,11 @@ Test separate learners and hosts, adult-admin and child-standard roles, fresh in
 
 ## Milestone 3 — extract adapters and package
 
-Separate transport, session control, request schema, configuration validation and Omarchy desktop integration. Specify a versioned local protocol with fixed action names, no arbitrary remote shell instructions. Provide safe upgrades, rollback, migrations and removal. Decide how a neutral alias for ask-dad should work without breaking the original command. Make installation reviewable and preserve local SSH/firewall policy.
+Separate transport, session control, request schema, configuration validation and Omarchy desktop integration. Specify a versioned local protocol with fixed action names, no arbitrary remote shell instructions. Provide safe upgrades, rollback, migrations and removal. Keep `ask-dad` and `ask-mom` as familiar aliases over generic `family-lab ask HELPER MESSAGE` routing. Preserve independent helper keys, explicit one-hop forwarding and unchanged consent. Make installation reviewable and preserve local SSH/firewall policy.
 
 ## Milestone 4 — actual shell plugin
 
-Verify the current official shell plugin loader, manifest and supported APIs from installed source/upstream documentation. Build an adapter that shows sharing state, participant requests, attachment status, expiry and an explicit stop button. Make helper and learner modes obvious. Integrate login/logout lifecycle without enabling unattended sharing, persistent privilege or user lingering. Add visible error states and fallback operations. Validate hot reload, upgrade/removal and compatibility on declared Omarchy releases.
+Verify the current official shell plugin loader, manifest and supported APIs from installed source/upstream documentation. Build an adapter that shows sharing state, participant requests, attachment status, expiry and an explicit stop button. Make helper and learner modes obvious. Integrate login/logout lifecycle without enabling unattended sharing, persistent privilege or user lingering. Render helper choices such as **Ask Mom** inline only after the actual plugin API/notification integration is verified; the current native adapter uses a click-through menu. Show original learner and relay provenance, delivery failure and original expiry. Do not confuse forwarding with parental command approval or a terminal-control grant. Add visible error states and fallback operations. Validate hot reload, upgrade/removal and compatibility on declared Omarchy releases.
 
 A plugin must not become a general remote-command executor, collect administrator keys, create passwordless sudo rules, bypass consent, or silently expose ports. The current consented terminal-control prototype has a separate opt-in key and documented threat model; a future plugin must preserve those boundaries and display its state clearly.
 
