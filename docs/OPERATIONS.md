@@ -22,7 +22,9 @@ Learner runs `family-lab stop` when finished. This kills the dedicated server an
 | Timeout | Check power/suspend, addresses, route, Wi-Fi isolation, sshd and IPv4/IPv6 firewall rules. No router forwarding. |
 | Wrong peer opens | Stop watcher; inspect fixed receive arguments and view_aliases. Each target must map to the intended host/account/key. |
 | Ask Mom / relay fails | Check the separate direct or relay key, Mom’s watcher, source/learner allowlist and viewing map. Use `family-lab inbox` to find the still-live original request and retry a configured route. Acknowledgement is not a read receipt. |
-| No Ask Mom button | Forwarding needs an explicitly enrolled route and Zenity. The native toast opens a menu; it does not render multiple inline buttons. |
+| No Ask Mom button | Forwarding needs an explicitly enrolled route. The native backend uses a Zenity menu; the optional inline plugin renders buttons on its own card. Relayed/already-forwarded requests do not offer another hop. |
+| Inline card missing | Check backend selection, enabled community.family-lab plugin, installed CLI path, desktop DND and the current Omarchy API version. Keep the watcher running for fallback. Use `family-lab ui-state` locally for diagnosis; its JSON contains private messages and must not be posted publicly. |
+| Inline action failed | Request stays available. Check its expiry and enrolled route/agent, then retry. Dismiss is local UI dismissal, not cancellation of running commands or control. |
 | Control request/approval fails | Check the separate control alias/key, active learning session, pending connection, local interactive confirmation and installed versions. Do not repurpose a viewing key. |
 | Ordinary viewer controls shell | Stop sharing immediately. Audit actual key used, forced command, unrestricted duplicates and read-only attach. Re-run negative tests. |
 | Still shareable after closing | Closing/detaching is not revocation. Learner runs `family-lab stop` from another local terminal in the same account. |
@@ -38,6 +40,6 @@ Back up learning files and necessary local config securely. The prototype does n
 
 ## Revoke or uninstall
 
-For control-only revocation use `family-lab revoke-control` or the learner shortcut; remove the separate control key to disable future requests. Review partial commands and already-started jobs: revocation does not undo them. Stop the learning server and watcher. Remove the affected public-key line to prevent new logins; established connections need explicit termination, including stopping the dedicated server. Rotate a lost key and recheck its restrictions. Do not delete an entire authorized_keys file.
+For control-only revocation use `family-lab revoke-control` or the learner shortcut; remove the separate control key to disable future requests. Review partial commands and already-started jobs: revocation does not undo them. For inline UI rollback, set backend to `native`, keep the watcher running, then disable/remove only community.family-lab through the installed plugin manager. Stop the learning server and watcher. Remove the affected public-key line to prevent new logins; established connections need explicit termination, including stopping the dedicated server. Rotate a lost key and recheck its restrictions. Do not delete an entire authorized_keys file.
 
 To remove the project, stop all sessions first, remove only its installed user commands, inspect and remove only its local config/state if desired, remove its SSH aliases/keys and reverse only dedicated firewall changes. Preserve unrelated SSH/admin access and user files. No application, desktop reset or account deletion is needed.

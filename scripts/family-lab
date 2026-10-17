@@ -235,6 +235,88 @@ def notify_help(data, cfg, helper, terminal):
     run([helper, '--app-name', 'Family Lab', '-u', 'normal',
          'Help requested: ' + data['person'] + suffix, body, '--exec', *action], timeout=10)
 
+def inline_alive():
+    try:
+        stamp = json.loads((STATE / 'inline-heartbeat.json').read_text())['time']
+        return type(stamp) in (int, float) and 0 <= time.time() - stamp <= 6
+    except (OSError, ValueError, KeyError):
+        return False
+
+def ui_state():
+    cfg = config()
+    enabled = cfg.get('notification_backend', 'native') == 'inline'
+    state = {'version': 1, 'enabled': enabled, 'paused': False, 'requests': []}
+    if not enabled:
+        return state
+    # Respect the desktop's DND without touching private shell service objects.
+    dnd = run(['omarchy-shell', 'notifications', 'dndState'],
+              capture_output=True, text=True, timeout=3).stdout.strip()
+    if dnd not in ('on', 'off'):
+        raise ValueError('Cannot determine desktop do-not-disturb state')
+    state['paused'] = dnd == 'on'
+    with request_lock():
+        prune_help()
+        for path in sorted((STATE / 'requests').glob('*.json')):
+            data = validate_help(json.loads(path.read_text()))
+            if data.get('ui_dismissed') or data.get('native_notified'):
+                continue
+            actions = [{'kind': 'open', 'label': 'Open terminal'}]
+            actions.extend({'kind': 'forward', 'label': label, 'target': target}
+                           for label, target in forward_choices(data, cfg).items())
+            actions.append({'kind': 'dismiss', 'label': 'Dismiss'})
+            state['requests'].append({'id': data['id'], 'peer': data['person'],
+                                      'message': data['message'], 'via': data.get('forwarded_by', ''),
+                                      'expires': data['expires'], 'actions': actions})
+        state['requests'].sort(key=lambda row: row['expires'])
+    if state['paused']:
+        state['requests'] = []
+    return state
+
+def ui_heartbeat():
+    if config().get('notification_backend', 'native') != 'inline':
+        raise ValueError('Inline backend is not enabled')
+    with request_lock():
+        save_json(STATE / 'inline-heartbeat.json', {'time': time.time()})
+
+def ui_action(args):
+    if len(args) not in (2, 3):
+        raise ValueError('Usage: family-lab ui-action ID open|dismiss|forward [HELPER]')
+    identifier, action = args[:2]
+    data = load_help(identifier)
+    if data.get('ui_dismissed'):
+        raise ValueError('Request already dismissed')
+    if action == 'open' and len(args) == 2:
+        terminal = shutil.which('omarchy-launch-terminal')
+        if not terminal:
+            raise ValueError('Omarchy terminal helper missing')
+        open_help(data, config(), terminal)
+    elif action == 'forward' and len(args) == 3:
+        forward_help(identifier, args[2])
+    elif action != 'dismiss' or len(args) != 2:
+        raise ValueError('Unknown request action; control approval is never a UI action')
+    with request_lock():
+        path = STATE / 'requests' / (request_id(identifier) + '.json')
+        # Re-read so successful forwarding metadata is preserved.
+        if path.exists():
+            data = json.loads(path.read_text())
+            data['ui_dismissed'] = True
+            save_json(path, data)
+    print('Request action completed (not a control approval)')
+
+def pending_native(cfg):
+    if cfg.get('notification_backend', 'native') not in ('native', 'inline'):
+        raise ValueError('notification_backend must be native or inline')
+    return cfg.get('notification_backend', 'native') != 'inline' or not inline_alive()
+
+def restore_native_queue(cfg):
+    # Caller holds request_lock. A dead plugin must not silently consume a request.
+    if pending_native(cfg):
+        for saved in (STATE / 'requests').glob('*.json'):
+            data = json.loads(saved.read_text())
+            item = STATE / 'queue' / saved.name
+            if not data.get('ui_dismissed') and not data.get('native_notified') and not item.exists():
+                save_json(item, data)
+
 def tmux(*args, check=True):
     result = subprocess.run(TMUX + list(args), capture_output=True, text=True)
     if check and result.returncode:
@@ -419,7 +501,8 @@ def main():
     if len(sys.argv) < 2:
         raise ValueError('Commands: install, learn, stop, view, ask [HELPER] MESSAGE, receive PERSON, watch, '
                          'assist PEER, control, allow-control [seconds], revoke-control, '
-                         'receive-forward SOURCE PEER, forward ID HELPER, request ID, inbox')
+                         'receive-forward SOURCE PEER, forward ID HELPER, request ID, inbox, '
+                         'ui-state, ui-heartbeat, ui-action ID ACTION [HELPER]')
     cmd = sys.argv[1]
     entrypoint = pathlib.Path(sys.argv[0]).name
     if entrypoint in ('ask-dad', 'ask-mom'):
@@ -448,7 +531,8 @@ def main():
                 'view_aliases':{'learner-a':'family-learner-a-view',
                                 'learner-b':'family-learner-b-view'},
                 'notify_aliases':{}, 'control_aliases':{},
-                'forward_routes':{}, 'relay_sources':{}}, indent=2)+'\n')
+                'forward_routes':{}, 'relay_sources':{},
+                'notification_backend':'native'}, indent=2)+'\n')
         print('Installed. Configure SSH aliases; read docs before using.')
     elif cmd == 'learn':
         if os.environ.get('TMUX'):
@@ -520,6 +604,12 @@ def main():
         request_menu(args[0])
     elif cmd == 'inbox':
         list_help()
+    elif cmd == 'ui-state':
+        print(json.dumps(ui_state()))
+    elif cmd == 'ui-heartbeat':
+        ui_heartbeat()
+    elif cmd == 'ui-action':
+        ui_action(args)
     elif cmd == 'watch':
         cfg = config()
         # Run in the real helper's graphical login, not an SSH session.
@@ -536,8 +626,11 @@ def main():
             queue.mkdir(exist_ok=True)
             print('Family Lab notifications active. Ctrl+C stops delivery.')
             while True:
+                cfg = config()
                 with request_lock():
                     prune_help()
+                    # Recover unhandled inline requests if the plugin stops or is disabled.
+                    restore_native_queue(cfg)
                     queued = sorted(queue.glob('*.json'))
                 for item in queued:
                     with request_lock():
@@ -552,7 +645,16 @@ def main():
                         saved = STATE / 'requests' / item.name
                         if not saved.exists():
                             save_json(saved, data)
-                    notify_help(data, cfg, helper, terminal)
+                        else:
+                            data = json.loads(saved.read_text())
+                    if not data.get('ui_dismissed') and not data.get('native_notified') and pending_native(cfg):
+                        notify_help(data, cfg, helper, terminal)
+                        with request_lock():
+                            # Preserve a simultaneous UI action's dismissal/relay metadata.
+                            if saved.exists():
+                                latest = json.loads(saved.read_text())
+                                latest['native_notified'] = True
+                                save_json(saved, latest)
                     with request_lock():
                         item.unlink(missing_ok=True)
                 time.sleep(1)

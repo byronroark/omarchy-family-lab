@@ -7,5 +7,6 @@
   "control_aliases": {},
   "notify_aliases": {},
   "forward_routes": {},
-  "relay_sources": {}
+  "relay_sources": {},
+  "notification_backend": "native"
 }

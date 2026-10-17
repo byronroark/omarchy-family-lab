@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "community.family-lab",
+  "name": "Family Lab",
+  "version": "0.3.0",
+  "author": "Omarchy Family Lab contributors",
+  "description": "Experimental themed request cards with inline assistance and helper-forwarding actions",
+  "kinds": ["service"],
+  "entryPoints": {"service": "plugin/Service.qml"}
+}
