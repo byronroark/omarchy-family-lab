@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Family Lab: explicit tmux sharing and SSH-authenticated desktop requests."""
-import contextlib, ctypes, fcntl, html, json, os, pathlib, re, select, shlex, shutil, signal, subprocess, sys, time, uuid
+import contextlib, ctypes, fcntl, html, json, math, os, pathlib, re, select, shlex, shutil, signal, subprocess, sys, time, uuid
 os.umask(0o077)
 HOME = pathlib.Path.home()
 STATE = HOME / '.local/state/family-lab'
@@ -9,12 +9,13 @@ TMUX = ['tmux', '-L', 'family-lab', '-f', '/dev/null']
 CONTROL = STATE / 'control.json'
 MAX_CONTROL_SECONDS = 300
 REQUEST_SECONDS = 60
+HELP_SECONDS = 600
 def run(args, **kw):
     return subprocess.run(args, check=True, **kw)
 def config():
     return json.loads(CONFIG.read_text())
 def alias(s):
-    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', s):
+    if not isinstance(s, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', s):
         raise ValueError('Use a plain SSH alias, not a hostname/command string')
     return s
 def ssh_args(host):
@@ -26,7 +27,7 @@ def message(s):
     if any(not c.isprintable() for c in s):
         raise ValueError('Use a single line without control characters')
     return s
-def read_request():
+def read_json_request():
     # Hard input size and time limit, including a client that never sends EOF.
     deadline = time.monotonic() + 5
     data = b''
@@ -40,10 +41,199 @@ def read_request():
         data += chunk
         if len(data) > 2048:
             raise ValueError('Request too large')
-    request = json.loads(data)
+    return json.loads(data)
+
+def read_request():
+    request = read_json_request()
     if not isinstance(request, dict) or set(request) != {'message'}:
         raise ValueError('Expected an object containing only message')
     return message(request['message'])
+
+def request_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[a-f0-9]{32}', value):
+        raise ValueError('Expected a request ID, not a path')
+    return value
+
+def validate_help(data):
+    request_id(data['id'])
+    alias(data['person'])
+    message(data['message'])
+    for field in ('time', 'expires'):
+        if (type(data[field]) not in (int, float) or not 0 <= data[field] <= 10**12
+                or not math.isfinite(data[field])):
+            raise ValueError('Invalid request timestamp')
+    now = time.time()
+    if not 0 < data['expires'] - data['time'] <= HELP_SECONDS:
+        raise ValueError('Invalid request lifetime')
+    if data['time'] > now + 60 or data['expires'] <= now:
+        raise ValueError('Request expired or clocks differ; ask again')
+    if data.get('forwarded_by'):
+        alias(data['forwarded_by'])
+    return data
+
+@contextlib.contextmanager
+def request_lock(name='receive'):
+    STATE.mkdir(parents=True, exist_ok=True)
+    with (STATE / (name + '.lock')).open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+def save_json(path, data):
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(data))
+    temp.replace(path)
+
+def prune_help():
+    for directory in ('requests', 'queue'):
+        folder = STATE / directory
+        folder.mkdir(parents=True, exist_ok=True)
+        for item in folder.glob('*.json'):
+            data = json.loads(item.read_text())
+            if data.get('expires', data['time'] + HELP_SECONDS) <= time.time():
+                item.unlink()
+
+def enqueue_help(data, rate_key):
+    validate_help(data)
+    with request_lock():
+        prune_help()
+        target = STATE / 'requests' / (data['id'] + '.json')
+        if target.exists():
+            previous = json.loads(target.read_text())
+            fields = ('id', 'person', 'message', 'time', 'expires', 'forwarded_by')
+            if any(previous.get(key) != data.get(key) for key in fields):
+                raise ValueError('Request ID conflicts with an existing request')
+            print('Already queued')  # Idempotent retry, including a lost SSH acknowledgement.
+            return
+        stamp = STATE / (rate_key + '.last')
+        now = time.time()
+        if stamp.exists() and now - float(stamp.read_text()) < 30:
+            raise ValueError('Please wait 30 seconds between requests')
+        live_ids = {path.stem for folder in ('requests', 'queue')
+                    for path in (STATE / folder).glob('*.json')}
+        if len(live_ids) >= 20:
+            raise ValueError('Inbox full; contact your helper directly')
+        save_json(STATE / 'queue' / target.name, data)
+        save_json(target, data)
+        stamp.write_text(str(now))
+    print('Queued')
+
+def load_help(identifier):
+    with request_lock():
+        prune_help()
+        path = STATE / 'requests' / (request_id(identifier) + '.json')
+        if not path.exists():
+            raise ValueError('Request missing or expired; learner should ask again')
+        return validate_help(json.loads(path.read_text()))
+
+def list_help():
+    with request_lock():
+        prune_help()
+        for path in sorted((STATE / 'requests').glob('*.json')):
+            data = validate_help(json.loads(path.read_text()))
+            route = ' via ' + data['forwarded_by'] if data.get('forwarded_by') else ''
+            route += ' forwarded to ' + data['forwarded_to'] if data.get('forwarded_to') else ''
+            print(data['id'] + ' ' + data['person'] + route)
+
+def receive_forward(args):
+    if len(args) != 2:
+        raise ValueError('Forced relay receiver needs SOURCE PEER')
+    source, person = map(alias, args)
+    cfg = config()
+    if person not in cfg.get('relay_sources', {}).get(source, []) or person not in cfg['view_aliases']:
+        raise ValueError('This relay source/peer is not enrolled')
+    payload = read_json_request()
+    if not isinstance(payload, dict) or set(payload) != {'id', 'message', 'time', 'expires'}:
+        raise ValueError('Invalid relay payload; sender and learner are fixed by the key')
+    data = dict(payload, person=person, forwarded_by=source)
+    enqueue_help(data, 'relay-' + source + '-' + person)
+
+def forward_help(identifier, destination):
+    destination = alias(destination)
+    with request_lock('forward'):
+        data = load_help(identifier)
+        if data.get('forwarded_by'):
+            raise ValueError('Already relayed requests cannot be forwarded again')
+        if data.get('forwarded_to'):
+            if data['forwarded_to'] != destination:
+                raise ValueError('Request was already forwarded to another helper')
+            print('Already forwarded (not a read receipt)')
+            return
+        host = config().get('forward_routes', {}).get(destination, {}).get(data['person'])
+        if not host:
+            raise ValueError('No enrolled forwarding route for this helper/learner')
+        payload = {key: data[key] for key in ('id', 'message', 'time', 'expires')}
+        run(ssh_args(host), input=json.dumps(payload).encode(), capture_output=True, timeout=12)
+        # Preserve original expiry and identity; forwarding transfers no keys or consent.
+        data['forwarded_to'] = destination
+        with request_lock():
+            save_json(STATE / 'requests' / (data['id'] + '.json'), data)
+        print('Forwarded to ' + destination + ' (not a read receipt)')
+
+def forward_choices(data, cfg):
+    if data.get('forwarded_by') or data.get('forwarded_to'):
+        return {}
+    choices = {}
+    for destination, peers in cfg.get('forward_routes', {}).items():
+        if data['person'] in peers:
+            destination = alias(destination)
+            label = 'Ask ' + destination.replace('-', ' ').title()
+            if label in choices:
+                raise ValueError('Helper labels must be distinct')
+            choices[label] = destination
+    return choices
+
+def open_help(data, cfg, terminal):
+    host = cfg['view_aliases'][data['person']]
+    run([terminal, 'ssh', '-tt', *ssh_args(host)[1:]], timeout=10)
+
+def request_menu(identifier):
+    data = load_help(identifier)
+    cfg = config()
+    terminal = shutil.which('omarchy-launch-terminal')
+    if not terminal:
+        raise ValueError('Omarchy terminal helper missing')
+    choices = forward_choices(data, cfg)
+    if not choices:
+        open_help(data, cfg, terminal)
+        return
+    zenity = shutil.which('zenity')
+    if not zenity:
+        raise ValueError('Forwarding menu needs Zenity; use family-lab forward ID HELPER instead')
+    text = 'Help requested: ' + data['person'] + '\n' + data['message']
+    result = subprocess.run([zenity, '--question', '--no-markup', '--title=Family Lab',
+                             '--text=' + text, '--ok-label=Open terminal', '--cancel-label=Close',
+                             '--timeout=120', *['--extra-button=' + label for label in choices]],
+                            capture_output=True, text=True, timeout=125)
+    choice = result.stdout.strip()
+    if choice in choices:
+        try:
+            forward_help(identifier, choices[choice])
+        except (ValueError, OSError, subprocess.SubprocessError):
+            run([zenity, '--error', '--no-markup', '--title=Family Lab',
+                 '--text=Forwarding failed. The original request remains available; retry or contact the other helper directly.'],
+                timeout=125)
+            raise
+        run([zenity, '--info', '--no-markup', '--title=Family Lab',
+             '--text=Request forwarded. This is not a read receipt or permission approval.'], timeout=125)
+    elif result.returncode == 0 and not choice:
+        open_help(load_help(identifier), cfg, terminal)
+    # Close, Escape and timeout do nothing; never forward by default.
+
+def notify_help(data, cfg, helper, terminal):
+    suffix = ' (via ' + data['forwarded_by'] + ')' if data.get('forwarded_by') else ''
+    # Native helper recognizes some dash-leading description strings as options.
+    # A trusted prefix keeps every peer message unambiguously display text.
+    body = 'Message: ' + html.escape(message(data['message']))
+    if forward_choices(data, cfg):
+        if not shutil.which('zenity'):
+            raise ValueError('Install/verify Zenity before enabling forwarding actions')
+        action = [sys.executable, str(pathlib.Path(__file__).resolve()), 'request', request_id(data['id'])]
+        body += '\nClick for Open terminal or Ask another helper.'
+    else:
+        action = [terminal, 'ssh', '-tt', *ssh_args(cfg['view_aliases'][data['person']])[1:]]
+        body += '\nClick to open the shared terminal.'
+    run([helper, '--app-name', 'Family Lab', '-u', 'normal',
+         'Help requested: ' + data['person'] + suffix, body, '--exec', *action], timeout=10)
 
 def tmux(*args, check=True):
     result = subprocess.run(TMUX + list(args), capture_output=True, text=True)
@@ -84,10 +274,11 @@ def control_client(record):
     expected = [str(record['pid']), record['client'], 'learning']
     return any(line.split('\t') == expected for line in clients.stdout.splitlines())
 
-def control_indicator(mode):
+def control_indicator(mode, helper='helper'):
+    label = alias(helper).replace('-', ' ').upper()
     labels = {
-        'pending': '#[bg=yellow,fg=black,bold] CONTROL REQUEST: allow-control to approve #[default]',
-        'active': '#[bg=red,fg=white,bold] HELPER CAN TYPE | Ctrl+b Ctrl+r: revoke #[default]',
+        'pending': '#[bg=yellow,fg=black,bold] ' + label + ' REQUESTS CONTROL: allow-control #[default]',
+        'active': '#[bg=red,fg=white,bold] ' + label + ' CAN TYPE | Ctrl+b Ctrl+r: revoke #[default]',
         'off': '#[fg=green] HELP VIEW ONLY #[default]',
     }
     tmux('set-option', '-t', 'learning', 'status', 'on')
@@ -121,7 +312,8 @@ def allow_control(args):
         if not record or record['phase'] != 'pending' or not control_client(record):
             raise ValueError('No pending helper control connection')
         request_id = record['id']
-        print('A holder of your enrolled CONTROL key wants to type in this learning terminal.\n'
+        helper_label = record.get('helper', 'helper').replace('-', ' ').title()
+        print('Your enrolled ' + helper_label + ' CONTROL key requests access to this learning terminal.\n'
               'They can run commands and change files as your account. Only approve someone you trust.\n'
               'Do not enter passwords or use sudo here. Stop: Ctrl+b then Ctrl+r, or family-lab revoke-control.')
     if input(f'Allow this connection for {seconds} seconds? Type yes: ').strip() != 'yes':
@@ -148,7 +340,10 @@ def child_guard(parent_pid):
     if os.getppid() != parent_pid:
         os._exit(1)
 
-def control_connection():
+def control_connection(args=()):
+    if len(args) > 1:
+        raise ValueError('Forced control command accepts at most one helper ID')
+    helper_id = alias(args[0]) if args else 'helper'
     if not sys.stdin.isatty():
         raise ValueError('Control requires an interactive SSH PTY')
     tmux('has-session', '-t', '=learning')
@@ -167,7 +362,7 @@ def control_connection():
         try:
             with control_state_lock():
                 revoke_locked()  # Clear any stale prior connection/indicator.
-                control_indicator('pending')
+                control_indicator('pending', helper_id)
             proc = subprocess.Popen(TMUX + ['attach-session', '-r', '-E', '-t', '=learning'],
                                     preexec_fn=lambda: child_guard(parent_pid))
             attach_deadline = time.monotonic() + 5
@@ -181,7 +376,7 @@ def control_connection():
                     raise ValueError('Control client did not attach')
                 time.sleep(0.05)
             with control_state_lock():
-                save_control({'id': request_id, 'pid': proc.pid, 'client': matches[0],
+                save_control({'id': request_id, 'pid': proc.pid, 'client': matches[0], 'helper': helper_id,
                               'process_identity': process_identity(proc.pid),
                               'phase': 'pending', 'deadline': control_clock() + REQUEST_SECONDS})
             while proc.poll() is None:
@@ -194,7 +389,7 @@ def control_connection():
                         break
                     if record['phase'] == 'approved':
                         # Visible warning must be configured before enabling input.
-                        control_indicator('active')
+                        control_indicator('active', record['helper'])
                         tmux('switch-client', '-c', record['client'], '-E', '-r', '-t', '=learning')
                         record['phase'] = 'active'
                         save_control(record)
@@ -222,10 +417,12 @@ def setup_learning_controls():
 
 def main():
     if len(sys.argv) < 2:
-        raise ValueError('Commands: install, learn, stop, view, ask, receive PERSON, watch, '
-                         'assist PEER, control, allow-control [seconds], revoke-control')
+        raise ValueError('Commands: install, learn, stop, view, ask [HELPER] MESSAGE, receive PERSON, watch, '
+                         'assist PEER, control, allow-control [seconds], revoke-control, '
+                         'receive-forward SOURCE PEER, forward ID HELPER, request ID, inbox')
     cmd = sys.argv[1]
-    if pathlib.Path(sys.argv[0]).name == 'ask-dad':
+    entrypoint = pathlib.Path(sys.argv[0]).name
+    if entrypoint in ('ask-dad', 'ask-mom'):
         cmd = 'ask'
         args = sys.argv[1:]
     else:
@@ -241,20 +438,22 @@ def main():
                 raise ValueError('Already installed: review changes before replacing file')
             shutil.copyfile(__file__, target)
             target.chmod(0o700)
-        link = dest / 'ask-dad'
-        if not link.exists():
-            link.symlink_to('family-lab')
+        for name in ('ask-dad', 'ask-mom'):
+            link = dest / name
+            if not link.exists():
+                link.symlink_to('family-lab')
         CONFIG.parent.mkdir(parents=True, exist_ok=True)
         if not CONFIG.exists():
             CONFIG.write_text(json.dumps({'notify_alias':'family-helper-notify',
                 'view_aliases':{'learner-a':'family-learner-a-view',
                                 'learner-b':'family-learner-b-view'},
-                'control_aliases':{}}, indent=2)+'\n')
+                'notify_aliases':{}, 'control_aliases':{},
+                'forward_routes':{}, 'relay_sources':{}}, indent=2)+'\n')
         print('Installed. Configure SSH aliases; read docs before using.')
     elif cmd == 'learn':
         if os.environ.get('TMUX'):
             raise ValueError('Start from a terminal outside tmux')
-        print('Sharing this learning terminal with your helper is available while it runs.\n'
+        print('Sharing this learning terminal with enrolled helpers is available while it runs.\n'
               'Only type things you are comfortable sharing. Use family-lab stop to end sharing.')
         with control_state_lock():
             if tmux('has-session', '-t', '=learning', check=False).returncode != 0:
@@ -273,7 +472,7 @@ def main():
             raise ValueError('No separately enrolled control alias for this peer')
         run(['ssh', '-tt', *ssh_args(host)[1:]])
     elif cmd == 'control':
-        control_connection()
+        control_connection(args)
     elif cmd == 'allow-control':
         allow_control(args)
     elif cmd == 'revoke-control':
@@ -284,11 +483,20 @@ def main():
         # Forced command: never evaluate SSH_ORIGINAL_COMMAND.
         os.execvp('tmux', TMUX + ['attach-session', '-r', '-E', '-t', '=learning'])
     elif cmd == 'ask':
+        destination = entrypoint[4:] if entrypoint in ('ask-dad', 'ask-mom') else 'dad'
+        if entrypoint == 'family-lab' and len(args) == 2:
+            destination, args = alias(args[0]), args[1:]
         if len(args) != 1:
-            raise ValueError('Usage: ask-dad "message"')
+            raise ValueError('Usage: ask-dad "message", ask-mom "message", or family-lab ask HELPER "message"')
+        cfg = config()
+        host = cfg.get('notify_aliases', {}).get(destination)
+        if host is None and destination == 'dad':
+            host = cfg.get('notify_alias')  # Preserve the original one-helper installation.
+        if not host:
+            raise ValueError('No enrolled notification route for ' + destination)
         run(TMUX + ['has-session', '-t', '=learning'], stdout=subprocess.DEVNULL)
         payload = json.dumps({'message': message(args[0])}).encode()
-        run(ssh_args(config()['notify_alias']), input=payload, timeout=12)
+        run(ssh_args(host), input=payload, timeout=12)
         print('Request accepted by the helper’s PC (not a read receipt).')
     elif cmd == 'receive':
         if len(args) != 1:
@@ -297,23 +505,21 @@ def main():
         if person not in config()['view_aliases']:
             raise ValueError('Unknown peer ID')
         text = read_request()
-        STATE.mkdir(parents=True, exist_ok=True)
-        with (STATE / 'receive.lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            stamp = STATE / (person + '.last')
-            now = time.time()
-            if stamp.exists() and now - float(stamp.read_text()) < 30:
-                raise ValueError('Please wait 30 seconds between requests')
-            queue = STATE / 'queue'
-            queue.mkdir(exist_ok=True)
-            if len(list(queue.glob('*.json'))) >= 20:
-                raise ValueError('Queue full; contact your helper directly')
-            target = queue / (uuid.uuid4().hex + '.json')
-            temp = target.with_suffix('.tmp')
-            temp.write_text(json.dumps({'person':person, 'message':text, 'time':now}))
-            temp.replace(target)
-            stamp.write_text(str(now))
-        print('Queued')
+        now = time.time()
+        enqueue_help({'id': uuid.uuid4().hex, 'person': person, 'message': text,
+                      'time': now, 'expires': now + HELP_SECONDS}, person)
+    elif cmd == 'receive-forward':
+        receive_forward(args)
+    elif cmd == 'forward':
+        if len(args) != 2:
+            raise ValueError('Usage: family-lab forward REQUEST_ID HELPER')
+        forward_help(args[0], args[1])
+    elif cmd == 'request':
+        if len(args) != 1:
+            raise ValueError('Usage: family-lab request REQUEST_ID')
+        request_menu(args[0])
+    elif cmd == 'inbox':
+        list_help()
     elif cmd == 'watch':
         cfg = config()
         # Run in the real helper's graphical login, not an SSH session.
@@ -330,20 +536,25 @@ def main():
             queue.mkdir(exist_ok=True)
             print('Family Lab notifications active. Ctrl+C stops delivery.')
             while True:
-                for item in sorted(queue.glob('*.json')):
-                    data = json.loads(item.read_text())
-                    if time.time() - data['time'] > 600:
-                        item.unlink()
-                        continue
-                    host = alias(cfg['view_aliases'][data['person']])
-                    # Native Omarchy action receives a fixed argv, never message text.
-                    run([helper, '--app-name', 'Family Lab', '-u', 'normal',
-                         'Help requested: ' + data['person'],
-                         html.escape(message(data['message'])) + '\nClick to open the shared terminal.',
-                         '--exec', terminal, 'ssh', '-tt', '-o', 'BatchMode=yes',
-                         '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', host],
-                        timeout=10)
-                    item.unlink()
+                with request_lock():
+                    prune_help()
+                    queued = sorted(queue.glob('*.json'))
+                for item in queued:
+                    with request_lock():
+                        prune_help()
+                        if not item.exists():
+                            continue
+                        data = json.loads(item.read_text())
+                        # Migrate a queued request from the original one-helper prototype.
+                        data.setdefault('id', request_id(item.stem))
+                        data.setdefault('expires', data['time'] + HELP_SECONDS)
+                        validate_help(data)
+                        saved = STATE / 'requests' / item.name
+                        if not saved.exists():
+                            save_json(saved, data)
+                    notify_help(data, cfg, helper, terminal)
+                    with request_lock():
+                        item.unlink(missing_ok=True)
                 time.sleep(1)
     else:
         raise ValueError('Unknown command')

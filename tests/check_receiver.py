@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory() as d:
     if os.geteuid() != 0:
         assert installed.returncode == 0, installed.stderr
         assert (pathlib.Path(d)/'.local/bin/ask-dad').is_symlink()
+        assert (pathlib.Path(d)/'.local/bin/ask-mom').is_symlink()
         assert call('install').returncode != 0
     config_path = pathlib.Path(d)/'.config/family-lab/config.json'
     config_path.parent.mkdir(parents=True, exist_ok=True)

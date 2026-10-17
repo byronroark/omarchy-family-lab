@@ -76,8 +76,8 @@ with tempfile.TemporaryDirectory() as directory:
         return any(line.split('\t') == [str(pid), '1'] for line in
                    tmux('list-clients', '-F', '#{client_pid}\t#{client_readonly}').splitlines())
 
-    def request():
-        proc, fd = terminal('control', remote=True)
+    def request(helper=None):
+        proc, fd = terminal('control', *([helper] if helper else []), remote=True)
         try:
             wait_for(lambda: record().get('phase') == 'pending', 'pending connection')
         except AssertionError:
@@ -184,10 +184,13 @@ with tempfile.TemporaryDirectory() as directory:
                  'child detached after supervisor death')
         assert cli('revoke-control').returncode == 0
 
-        # Stop also disconnects the control client and clears its request.
-        helper, helper_fd, pid = request()
+        # Named helper comes from the forced key argument, not the approval or message.
+        helper, helper_fd, pid = request('mom')
+        assert record()['helper'] == 'mom'
         approve()
         wait_for(lambda: record().get('phase') == 'active', 'approval before stop')
+        assert 'MOM CAN TYPE' in tmux('show-options', '-v', '-t', 'learning', 'status-right')
+        # Stop also disconnects the control client and clears its request.
         assert cli('stop').returncode == 0
         helper.wait(timeout=5)
         assert not state.exists()

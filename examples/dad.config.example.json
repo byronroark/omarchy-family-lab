@@ -1,0 +1,7 @@
+{
+  "notify_aliases": {},
+  "view_aliases": {"learner-a": "family-learner-a-view"},
+  "control_aliases": {},
+  "forward_routes": {"mom": {"learner-a": "family-mom-learner-a-relay"}},
+  "relay_sources": {}
+}

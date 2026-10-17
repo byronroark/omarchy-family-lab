@@ -42,3 +42,35 @@ Host family-learner-a-control
     ForwardX11 no
     ClearAllForwardings yes
     StrictHostKeyChecking yes
+
+# Learner-side direct routes, each with an independent notification key.
+Host family-dad-notify
+    HostName <dad-helper-address>
+    User <dad-desktop-login>
+    IdentityFile <absolute-learner-to-dad-notification-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes
+
+Host family-mom-notify
+    HostName <mom-helper-address>
+    User <mom-desktop-login>
+    IdentityFile <absolute-learner-to-mom-notification-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes
+
+# Dad-side relay alias: NEW key scoped to receive-forward dad learner-a on Mom.
+Host family-mom-learner-a-relay
+    HostName <mom-helper-address>
+    User <mom-desktop-login>
+    IdentityFile <absolute-dad-to-mom-learner-a-relay-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes

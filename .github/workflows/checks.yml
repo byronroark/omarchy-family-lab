@@ -17,6 +17,8 @@ jobs:
         run: bash -n scripts/preflight.sh
       - name: Verify receiver boundaries
         run: python3 tests/check_receiver.py
+      - name: Verify helper routing and forwarding
+        run: python3 tests/check_routing.py
       - name: Verify isolated read-only view
         run: python3 tests/check_tmux.py
       - name: Verify consented control lifecycle

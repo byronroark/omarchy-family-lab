@@ -7,8 +7,9 @@ Visible, consent-based terminal assistance for Omarchy PCs on a trusted local ne
 ## What it does
 
 - A learner starts a dedicated tmux learning terminal.
-- `ask-dad "Could you help explain this?"` submits a bounded message over authenticated SSH.
-- The helper receives an Omarchy desktop notification with an action to open that learner’s terminal.
+- `ask-dad "Could you help explain this?"` or `ask-mom "Could you help explain this?"` sends a bounded message over independent authenticated SSH routes.
+- Dad can click his notification, then **Ask Mom**, to forward the same live help request using a separately enrolled relay key. Mom receives the learner identity marked **via dad**.
+- Each helper receives an Omarchy desktop notification. When forwarding is configured, its click opens an **Open terminal / Ask Mom / Close** menu; otherwise it opens the read-only terminal directly.
 - A separate restricted viewing key attaches read-only. The learner can end sharing and disconnect viewers.
 - Optional [consented control](docs/CONTROL.md) uses another key, local approval for each connection, a red status indicator, a five-minute maximum grant and a learner revoke shortcut.
 
@@ -34,17 +35,18 @@ Each learner uses a generic configured peer ID such as `learner-a`. Multiple lea
 2. Follow the [staged installation guide](docs/INSTALL.md), stopping at each acceptance gate.
 3. Use the [operations guide](docs/OPERATIONS.md) for normal sessions, recovery and removal.
 4. For optional hands-on help, read [consented control](docs/CONTROL.md) and enroll a separate control key.
-5. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
+5. Enroll multiple helpers and optional request forwarding with [ROUTING.md](docs/ROUTING.md).
+6. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
 
 No curl-to-shell installer, automatic account creation, driver changes, firewall edits or SSH policy changes are provided. Do not run the user installer as root. No default keyboard shortcuts or monitor layouts are changed.
 
-**Control remains opt-in.** The notification always opens read-only. Helper requests control with `family-lab assist learner-a`; learner approves locally with `family-lab allow-control`. Ctrl+B then Ctrl+R revokes control without ending the learning session. Control gives a trusted helper the learning account’s shell capabilities; it is not a sandbox.
+**Control remains opt-in.** Notifications and forwarding never approve control; opening the terminal from either path is read-only. Helper requests control with `family-lab assist learner-a`; learner approves locally with `family-lab allow-control`. Ctrl+B then Ctrl+R revokes control without ending the learning session. Control gives a trusted helper the learning account’s shell capabilities; it is not a sandbox.
 
 **Closing or detaching the terminal does not end sharing.** `family-lab stop` ends the dedicated tmux server, disconnects viewers and ends its running jobs. Never type secrets or perform privileged work in a shared terminal.
 
 ## Development and plugin direction
 
-See [contributing](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). Transport and session logic stay separate from the desktop adapter so a future shell plugin can provide visible sharing status and request controls without handling admin credentials.
+See [contributing](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). Routing/session logic and their fixed local actions stay separate from the desktop adapter so a future shell plugin can provide visible sharing status and request controls without handling admin credentials.
 
 Published material must contain synthetic examples only. Never contribute private keys, personal configuration, household details, logs, chat transcripts, screenshots with personal information, or hardware inventories.
 

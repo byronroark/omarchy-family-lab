@@ -1,0 +1,10 @@
+{
+  "notify_aliases": {
+    "dad": "family-dad-notify",
+    "mom": "family-mom-notify"
+  },
+  "view_aliases": {},
+  "control_aliases": {},
+  "forward_routes": {},
+  "relay_sources": {}
+}
