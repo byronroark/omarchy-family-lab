@@ -7,6 +7,10 @@
 - `install`: installs user commands under `~/.local/bin` and creates a generic local JSON config. Refuses to overwrite a different existing installed file.
 - `learn`: opens or reattaches a named learning session on a dedicated tmux server (`-L family-lab`, empty initial configuration).
 - `stop`: kills that dedicated server and its jobs, disconnecting viewers.
+- `assist <peer-id>`: helper command using an optional separately enrolled control alias/key.
+- `control`: forced-command target; one supervised read-only client waits for connection-specific local consent, then receives at most five minutes of writable input.
+- `allow-control [seconds]`: local interactive warning/confirmation, bound to the exact pending request; no blanket/reusable grant.
+- `revoke-control`: removes input permission and detaches the registered controller, keeping ordinary viewers and learning jobs. Also bound to Ctrl+B then Ctrl+R only in the learning tmux server.
 - `view`: forced-command target; attaches read-only to the learning session and ignores SSH_ORIGINAL_COMMAND.
 - `ask`: invoked through `ask-dad`; requires a learning session and sends JSON on SSH stdin. No message text enters a remote command.
 - `receive <peer-id>`: forced-command target; accepts only a peer configured in the helper’s view mapping. Identity is fixed by the key’s forced argument, never supplied in the payload.
@@ -23,6 +27,8 @@ Notifications authenticate a key, not a human’s current presence. A stolen not
 The receiver executes as the helper’s desktop user. This is an intentionally small prototype, not a fully isolated service. A receiver defect could affect that account. A dedicated receiver identity with carefully permissioned IPC is a future hardening milestone.
 
 The tmux server owner controls its configuration and content. Read-only is an input restriction on the viewing client, not a hostile-user sandbox or guarantee against terminal escape sequence exploits. Keep both sides’ software current. Use the dedicated server only for learning. Other sessions created on that same server may be accessible through client switching, so do not put private work there.
+
+For optional control, a private request record is serialized under a state lock and a separate lifetime lock admits only one connection. The supervisor tracks the tmux client PID/name, Linux process start time and boot identity. It enables the red indicator before toggling that client writable. A boot-time clock includes suspend; pending requests expire after 60 seconds and approval is at most 300 seconds. Normal revoke removes input permission before detach; Linux PR_SET_PDEATHSIG kills the client on supervisor death. A new connection always needs new consent. [Control details and limits](CONTROL.md) explain why approved shell access is a trust boundary, not a sandbox.
 
 The account’s administrator rights are independent of viewing restrictions. An adult can keep full privileges on their own PC while the helper’s view key remains read-only. Administrator shells and passwords belong in separate unshared terminals. A child’s standard account and a separate parent administrator are a separate machine policy, not enforced by these scripts.
 

@@ -2,9 +2,9 @@
 
 ## A normal session
 
-Helper starts the visible watcher and loads the appropriate viewing key into their local agent. Learner starts `family-lab learn`, does only agreed learning work, and uses `ask-dad "message"` when assistance is wanted. Helper clicks the notification, explains what they see and suggests steps. The learner types the commands.
+Helper starts the visible watcher and loads the appropriate viewing key into their local agent. Learner starts `family-lab learn`, does only agreed learning work, and uses `ask-dad "message"` when assistance is wanted. Helper clicks the notification, explains what they see and suggests steps. The learner types the commands by default. For agreed hands-on assistance, use the separate [consented control workflow](CONTROL.md): helper requests, learner approves locally, red status shows writable control, and Ctrl+B then Ctrl+R revokes it.
 
-For an adult administrator, system changes can be made in their own separate unshared terminal. Helper admin work uses only a separate explicitly authorized account/key. For a child standard account, a parent performs agreed admin tasks separately. Never weaken viewing-key restrictions to make typing easier.
+For an adult administrator, system changes can be made in their own separate unshared terminal. Helper admin work uses only a separate explicitly authorized account/key. For a child standard account, a parent performs agreed admin tasks separately. Never weaken viewing-key restrictions to make typing easier; optional control has a different key and consent path.
 
 Learner runs `family-lab stop` when finished. This kills the dedicated server and its jobs. Closing a terminal and Ctrl+B D merely detach. Helper closes the viewer and stops the watcher with Ctrl+C.
 
@@ -21,7 +21,8 @@ Learner runs `family-lab stop` when finished. This kills the dedicated server an
 | Host key changed | Stop and compare at the physical console. Investigate address reuse/reinstallation before changing known_hosts. |
 | Timeout | Check power/suspend, addresses, route, Wi-Fi isolation, sshd and IPv4/IPv6 firewall rules. No router forwarding. |
 | Wrong peer opens | Stop watcher; inspect fixed receive arguments and view_aliases. Each target must map to the intended host/account/key. |
-| Viewer controls shell | Stop sharing immediately. Audit actual key used, forced command, unrestricted duplicates and read-only attach. Re-run negative tests. |
+| Control request/approval fails | Check the separate control alias/key, active learning session, pending connection, local interactive confirmation and installed versions. Do not repurpose a viewing key. |
+| Ordinary viewer controls shell | Stop sharing immediately. Audit actual key used, forced command, unrestricted duplicates and read-only attach. Re-run negative tests. |
 | Still shareable after closing | Closing/detaching is not revocation. Learner runs `family-lab stop` from another local terminal in the same account. |
 | Queue full | Restore watcher; stale entries expire on processing. Inspect/remove only confirmed old request files locally. Contact each other directly while unavailable. |
 
@@ -35,6 +36,6 @@ Back up learning files and necessary local config securely. The prototype does n
 
 ## Revoke or uninstall
 
-Stop the learning server and watcher. Remove the affected public-key line to prevent new logins; established connections need explicit termination, including stopping the dedicated server. Rotate a lost key and recheck its restrictions. Do not delete an entire authorized_keys file.
+For control-only revocation use `family-lab revoke-control` or the learner shortcut; remove the separate control key to disable future requests. Review partial commands and already-started jobs: revocation does not undo them. Stop the learning server and watcher. Remove the affected public-key line to prevent new logins; established connections need explicit termination, including stopping the dedicated server. Rotate a lost key and recheck its restrictions. Do not delete an entire authorized_keys file.
 
 To remove the project, stop all sessions first, remove only its installed user commands, inspect and remove only its local config/state if desired, remove its SSH aliases/keys and reverse only dedicated firewall changes. Preserve unrelated SSH/admin access and user files. No application, desktop reset or account deletion is needed.

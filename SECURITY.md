@@ -8,9 +8,10 @@ Do not open a public issue containing credentials, exploitable personal configur
 
 ## Required boundaries
 
-- Separate notification, viewing and administrator keys. Never reuse an admin credential for this workflow.
+- Separate notification, viewing, optional control and administrator keys. Never reuse an admin credential for this workflow.
 - Restricted forced commands, source address restrictions, no forwarding and verified SSH host keys. Never disable strict host-key checking to get past an error.
-- Learner starts sharing deliberately. Helper can connect while that dedicated server exists; no per-attachment consent prompt is implemented. Detach/close is not revoke. Stop kills the server and its jobs.
+- Optional control requires a separately enrolled forced-command key and local interactive confirmation for each pending connection. The initial connection is read-only; approved control lasts at most five minutes and has a visible red status plus a learner revoke shortcut. See [control threat model](docs/CONTROL.md#trust-model-and-limits). Approval grants the learning account’s shell capabilities; revocation cannot undo commands or prevent a malicious approved helper from establishing other access. This is trusted cooperative assistance, not a hostile-controller sandbox. Local confirmation is not human identity authentication.
+- Learner starts sharing deliberately. Helper can connect while that dedicated server exists; read-only views need no per-attachment prompt, while each control connection requires fresh approval. Detach/close is not revoke. Stop kills the server and its jobs.
 - No secrets, private content, passwords, sudo shells or API keys in a shared terminal. Read-only clients still receive screen output and scrollback.
 - Adult learners keep authority over their own PC and can remove the helper’s key or decline assistance. Do not use the tool for covert monitoring.
 - Remote administration requires a separate explicitly authorized account/key and normal interactive privilege checks. `ask-dad` grants no admin access.

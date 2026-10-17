@@ -4,7 +4,7 @@ This is a community proposal and implementation path, not an acceptance commitme
 
 ## Milestone 1 — auditable CLI prototype (current)
 
-Generic roles, local-only examples, explicit sharing and revocation, restricted SSH transport, desktop notification action, bounded queue, basic tests, staged deployment and documented limits. Full SSH/desktop acceptance remains pending.
+Generic roles, local-only examples, explicit sharing and revocation, restricted SSH transport, desktop notification action, bounded queue, basic tests, staged deployment and documented limits. Optional consented control now adds a separate key, local connection-specific approval, visible status, bounded duration and revocation; its trust model is in CONTROL.md. Full SSH/desktop acceptance remains pending.
 
 ## Milestone 2 — verified multi-PC workflow
 
@@ -18,7 +18,7 @@ Separate transport, session control, request schema, configuration validation an
 
 Verify the current official shell plugin loader, manifest and supported APIs from installed source/upstream documentation. Build an adapter that shows sharing state, participant requests, attachment status, expiry and an explicit stop button. Make helper and learner modes obvious. Integrate login/logout lifecycle without enabling unattended sharing, persistent privilege or user lingering. Add visible error states and fallback operations. Validate hot reload, upgrade/removal and compatibility on declared Omarchy releases.
 
-A plugin must not become a general remote-command executor, collect administrator keys, create passwordless sudo rules, bypass consent, or silently expose ports. A consented remote-control mode, if ever proposed, is separate from this read-only design and requires its own threat model.
+A plugin must not become a general remote-command executor, collect administrator keys, create passwordless sudo rules, bypass consent, or silently expose ports. The current consented terminal-control prototype has a separate opt-in key and documented threat model; a future plugin must preserve those boundaries and display its state clearly.
 
 ## Milestone 5 — upstream discussion and possible distribution
 

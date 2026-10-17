@@ -30,3 +30,15 @@ Host family-helper-notify
     ForwardX11 no
     ClearAllForwardings yes
     StrictHostKeyChecking yes
+
+# Optional helper-side control alias: enroll a NEW control key separately.
+# See docs/CONTROL.md; no control is enabled by the base configuration.
+Host family-learner-a-control
+    HostName <learner-a-address>
+    User <learner-a-login>
+    IdentityFile <absolute-learner-a-control-private-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes
