@@ -67,7 +67,7 @@ def read(path):
 def defaults(peers):
     return {'schema': 1, 'timezone': 'UTC', 'subjects': {
         peer: {'name': peer, 'mode': 'off', 'daily_minutes': {day: 90 for day in DAYS},
-               'hours': {day: [['08:00', '20:00']] for day in DAYS}, 'grace_seconds': 120,
+               'hours': {day: [['08:00', '20:00']] for day in DAYS}, 'grace_seconds': 180,
                'browser': {'enabled': False, 'blocked': [], 'allowed': [], 'safe_search': False}}
         for peer in peers}}
 
@@ -130,6 +130,41 @@ def validate(policy, enrolled, browsers=()):
     if enabled_browsers > 1:
         raise ValueError('Browser policies are machine-wide; use at most one browser profile per PC')
     return policy
+
+def next_allowed(policy, usage, peer, now):
+    """Forecast the next policy-permitted minute; never invent a reopening time."""
+    zone = ZoneInfo(policy['timezone'])
+    item = policy['subjects'][peer]
+    if item['mode'] != 'enforce':
+        return None
+    high = max(usage['days'], default='0001-01-01')
+    candidate = now
+    # Iterate real UTC minutes so DST gaps/folds match the daemon's local-time evaluation.
+    for step in range(8*24*60+1):
+        local = dt.datetime.fromtimestamp(candidate, zone)
+        day = local.date().isoformat()
+        counter_day = max(day, high)
+        used = usage['days'].get(counter_day, {}).get(peer, 0)
+        limit = item['daily_minutes'][DAYS[local.weekday()]]*60 + usage['grants'].get(counter_day+'/'+peer, 0)*60
+        minutes = local.hour*60+local.minute
+        if used < limit and any(minute(a) <= minutes < minute(b) for a,b in item['hours'][DAYS[local.weekday()]]):
+            return {'at': candidate, 'label': local.strftime('%a %Y-%m-%d %H:%M %Z'),
+                    'timezone': policy['timezone']}
+        candidate = (int(candidate)//60+1)*60
+    return None
+
+def hibernation_capability():
+    """Read-only probe. CanHibernate is not a resume test or permission to enable the guard."""
+    try:
+        result = subprocess.run(['/usr/bin/busctl','--system','call','org.freedesktop.login1',
+            '/org/freedesktop/login1','org.freedesktop.login1.Manager','CanHibernate'],
+            capture_output=True,text=True,check=True,timeout=3)
+        match = re.fullmatch(r's "(yes|no|challenge|na)"', result.stdout.strip())
+        value = match.group(1) if match else 'unknown'
+    except (OSError,subprocess.SubprocessError):
+        value = 'unknown'
+    return {'logind': value, 'available': value == 'yes', 'ready_for_family_lab': False,
+            'note': 'Secure lock/resume integration and a real hibernate/resume acceptance test are still required.'}
 
 def boot_id():
     return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
@@ -315,7 +350,8 @@ class Engine:
                     'day': counter_day, 'used_seconds': round(used), 'remaining_seconds': max(0, round(allowance-used)),
                     'would_block': bool(reason), 'reason': reason, 'blocked': blocked,
                     'grace_seconds': None if grace_left is None else round(grace_left), 'paused': paused,
-                    'logged_in': enrollment['uid'] in active}
+                    'logged_in': enrollment['uid'] in active,
+                    'next_allowed': next_allowed(self.current['policy'], self.state, peer, now) if blocked else None}
             # Retain 30 daily totals; detailed browsing/application data is never collected here.
             for old in sorted(self.state['days'])[:-30]:
                 del self.state['days'][old]
@@ -561,6 +597,8 @@ def main(args):
                         subprocess.run(['omarchy-notification-send','--app-name','Family Lab','Family Lab time',text],check=True,timeout=5)
                         break
             time.sleep(5)
+    elif args == ['hibernation-check']:
+        print(json.dumps(hibernation_capability(),indent=2))
     elif args == ['status']:
         print(json.dumps(read(RUNTIME/'status.json'), indent=2, ensure_ascii=False))
     elif args and args[0] == 'local' and os.geteuid() == 0:
@@ -568,7 +606,7 @@ def main(args):
             raise ValueError('Usage: family-lab-policy local JSON_OPERATION')
         print(json.dumps(client(json.loads(args[1])), indent=2, ensure_ascii=False))
     else:
-        raise ValueError('Commands: status; watch; recover (local root); remote (forced SSH); daemon (root); login-check (PAM); local JSON (root)')
+        raise ValueError('Commands: status; hibernation-check; watch; recover (local root); remote (forced SSH); daemon (root); login-check (PAM); local JSON (root)')
 
 if __name__ == '__main__':
     try:

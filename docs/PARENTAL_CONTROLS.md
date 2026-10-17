@@ -10,7 +10,7 @@
 | Screen-time monitoring | Per-day allowances and allowed hours in a named timezone; persistent sampled totals | Counts any logged-in user session while awake, including idle/locked time; not attention or foreground time |
 | Time enforcement | Deny new managed logins when blocked; terminate that user's sessions after a configurable grace period | Requires verified PAM/loginctl integration; unsaved work/jobs can be lost |
 | Exceptions | Add 15/30 minutes; time pause; temporary browser domain exceptions | Extra minutes do not override bedtime; pause affects time only |
-| Browser rules | Optional Chromium domain block/allow rules, Google SafeSearch, managed DoH off | Machine-wide, all Chromium users/profiles; other browsers/apps/VPNs are not filtered |
+| Browser rules | Optional Chromium domain block/allow rules, Google SafeSearch | Machine-wide, all Chromium users/profiles; other browsers/apps/VPNs are not filtered |
 | Parent operations | Terminal menu, private policy snapshots, conflict rejection, changes/request history, daily Markdown totals | No web server; no themed graphical policy forms yet |
 | Learner visibility | Locally readable status and a visible desktop warning watcher | Watcher is separate from root enforcement; stopping warnings does not stop enforcement |
 | Detailed reports | Existing explicit-import reporting remains available | No automatic foreground-app or browser-visit collector yet |
@@ -37,7 +37,7 @@ Policy days use an explicit IANA timezone (default UTC); set the household timez
 
 Daily counters keep the highest recorded date when the wall clock moves backward. This is not a trusted external clock: root, polkit time-changing grants, or compromised system time can defeat wall-clock schedules. Audit those privileges. Pause/site-expiry deadlines use wall time plus Linux boot time within the same boot; suspend cannot extend them. After reboot wall time determines remaining exception lifetime. Root clock changes remain a trust boundary.
 
-Enforcement marks new managed logins blocked immediately after a healthy poll. Existing sessions receive a configured 60-600 second grace period (default 120), persisted across service restart. After it expires `loginctl terminate-user UID` ends **all** that learner's sessions/jobs, including shared terminals. No per-app work preservation is promised. A later login is still denied until hours/allowance permit it or an authorized parent changes the policy.
+Enforcement marks new managed logins blocked immediately after a healthy poll. Existing sessions receive a configured 60-600 second grace period (default 180 for new policies; existing configured values are preserved), persisted across service restart. After it expires `loginctl terminate-user UID` ends **all** that learner's sessions/jobs, including shared terminals. No per-app work preservation is promised. A later login is still denied until hours/allowance permit it or an authorized parent changes the policy.
 
 The login gate attaches to the reviewed Arch `/etc/pam.d/system-login` account stack. Verify that every deployed graphical/autologin/TTY/SSH path includes it and has no earlier PAM sufficient bypass. A custom service bypassing PAM is outside this gate. The root service and PAM helper must be installed on a PC with a standard child account, not one retaining sudo/Docker/empower or other elevation paths.
 
@@ -164,3 +164,7 @@ Run `python3 tests/check_parental.py`: schema/authentication, real socket UID, c
 Then use a disposable Omarchy VM/account and recovery console to verify actual service sandbox permissions, caller-account key enrollment, PAM inclusion for SDDM/autologin/TTY/SSH, denial while blocked, absence of admin lockout, actual `terminate-user` and job termination after warnings, clock/suspend/reboot behavior, offline parents, policy corruption and local recovery. Use short test limits with no unsaved work. Validate Chromium policy recognition and exception expiry in the installed version. Root policy files must be unmodifiable by the child, and all escalation paths audited.
 
 Only after those deployment gates pass should the family installation guide be revised to call this ready for routine enforcement. Installing everything once cannot eliminate future security updates and compatibility tests; the goal is to install a stable module boundary once and make everyday changes through the policy menu.
+
+## Dino experience under development
+
+See [DINO_FLOW.md](DINO_FLOW.md). The design preview and next-session forecast are implemented; the protected login/resume guard, learner action channel and actual hibernation end action are not. Existing enforcement still terminates sessions. Do not deploy it expecting the proposed work-preserving Dino experience.

@@ -34,7 +34,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises((ValueError,PermissionError,KeyError)):
             self.engine.request(uid,req)
     def apply(self,mode='monitor',minutes=1):
-        policy=copy.deepcopy(self.engine.current['policy']);s=policy['subjects']['alex'];s['mode']=mode
+        policy=copy.deepcopy(self.engine.current['policy']);s=policy['subjects']['alex'];s['mode']=mode;s['grace_seconds']=120
         s['daily_minutes']={d:minutes for d in m.DAYS}
         return self.engine.request(2102,{'op':'apply','base_revision':self.engine.current['revision'],'policy':policy})
     def test_off_and_parent_authorization(self):

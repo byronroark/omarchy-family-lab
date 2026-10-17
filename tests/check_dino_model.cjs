@@ -1,0 +1,27 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const path = require('node:path');
+const model = {};
+vm.createContext(model);
+vm.runInContext(fs.readFileSync(path.join(__dirname, '../guardian/Flow.js'), 'utf8').replace(/^\.pragma library\s*/, ''), model);
+const initial = {version: 1, phase: 'time-up', remaining: 180, nextLabel: 'Example Sunday 09:00 UTC', helpers: ['dad']};
+const state = model.parse(JSON.stringify(initial));
+assert(model.permitted(state, 'save'));
+assert(!model.permitted(state, 'ask-mom'));
+assert(!model.permitted(state, 'sudo'));
+assert(!model.permitted({...state, phase: 'unknown'}, 'sleep'));
+const saving = model.advance(state, 'save');
+assert.equal(saving.remaining, 180);
+assert.equal(state.phase, 'time-up');
+assert.throws(() => model.advance(saving, 'save'));
+assert.equal(model.tick(saving, 179).remaining, 1);
+const expired = model.tick(saving, 180);
+assert.equal(expired.phase, 'blocked');
+assert(!model.permitted(expired, 'save'));
+assert.equal(model.tick(initial, 180).phase, 'blocked'); // No click still expires.
+assert.equal(model.countdown(61), '1:01');
+for (const change of [{version: 2}, {phase: 'unlock'}, {remaining: -1}, {remaining: 601}, {helpers: ['admin']}])
+    assert.throws(() => model.parse(JSON.stringify({...initial, ...change})));
+assert.throws(() => model.tick(saving, -1));
+console.log('PASS: Dino phases, fixed actions, one save transition, no added time, absent helper, automatic expiry and countdown');

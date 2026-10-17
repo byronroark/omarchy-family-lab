@@ -33,3 +33,5 @@ jobs:
         run: python3 tests/check_parental.py
       - name: Verify staged system installer without system changes
         run: python3 tests/check_parental_installer.py
+      - name: Verify Dino presentation and permitted-time forecast
+        run: node tests/check_dino_model.cjs && python3 tests/check_next_allowed.py
