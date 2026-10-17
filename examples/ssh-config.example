@@ -1,0 +1,32 @@
+# Synthetic template only. Replace locally, never commit completed values.
+# Helper's local ~/.ssh/config:
+Host family-learner-a-view
+    HostName <learner-a-address>
+    User <learner-a-login>
+    IdentityFile <absolute-learner-a-view-private-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes
+
+Host family-learner-b-view
+    HostName <learner-b-address>
+    User <learner-b-login>
+    IdentityFile <absolute-learner-b-view-private-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes
+
+# Each learner's local ~/.ssh/config (its own independent key):
+Host family-helper-notify
+    HostName <helper-address>
+    User <helper-desktop-login>
+    IdentityFile <absolute-notification-private-key-path>
+    IdentitiesOnly yes
+    ForwardAgent no
+    ForwardX11 no
+    ClearAllForwardings yes
+    StrictHostKeyChecking yes

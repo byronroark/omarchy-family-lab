@@ -1,0 +1,21 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  prototype:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux
+      - name: Check Python syntax
+        run: python3 -m py_compile scripts/family-lab
+      - name: Check shell syntax
+        run: bash -n scripts/preflight.sh
+      - name: Verify receiver boundaries
+        run: python3 tests/check_receiver.py
+      - name: Verify isolated read-only view
+        run: python3 tests/check_tmux.py

@@ -1,0 +1,7 @@
+{
+  "notify_alias": "family-helper-notify",
+  "view_aliases": {
+    "learner-a": "family-learner-a-view",
+    "learner-b": "family-learner-b-view"
+  }
+}

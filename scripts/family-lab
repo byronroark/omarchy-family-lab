@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Family Lab: explicit tmux sharing and SSH-authenticated desktop requests."""
+import fcntl, html, json, os, pathlib, re, select, shutil, subprocess, sys, time, uuid
+os.umask(0o077)
+HOME = pathlib.Path.home()
+STATE = HOME / '.local/state/family-lab'
+CONFIG = HOME / '.config/family-lab/config.json'
+TMUX = ['tmux', '-L', 'family-lab', '-f', '/dev/null']
+def run(args, **kw):
+    return subprocess.run(args, check=True, **kw)
+def config():
+    return json.loads(CONFIG.read_text())
+def alias(s):
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', s):
+        raise ValueError('Use a plain SSH alias, not a hostname/command string')
+    return s
+def ssh_args(host):
+    return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', alias(host)]
+def message(s):
+    if not isinstance(s, str) or not 1 <= len(s) <= 300:
+        raise ValueError('Message must contain 1–300 characters')
+    if any(not c.isprintable() for c in s):
+        raise ValueError('Use a single line without control characters')
+    return s
+def read_request():
+    # Hard input size and time limit, including a client that never sends EOF.
+    deadline = time.monotonic() + 5
+    data = b''
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([0], [], [], remaining)[0]:
+            raise ValueError('Request timed out')
+        chunk = os.read(0, 2049 - len(data))
+        if not chunk:
+            break
+        data += chunk
+        if len(data) > 2048:
+            raise ValueError('Request too large')
+    request = json.loads(data)
+    if not isinstance(request, dict) or set(request) != {'message'}:
+        raise ValueError('Expected an object containing only message')
+    return message(request['message'])
+def main():
+    if len(sys.argv) < 2:
+        raise ValueError('Commands: install, learn, stop, view, ask, receive PERSON, watch')
+    cmd = sys.argv[1]
+    if pathlib.Path(sys.argv[0]).name == 'ask-dad':
+        cmd = 'ask'
+        args = sys.argv[1:]
+    else:
+        args = sys.argv[2:]
+    if cmd == 'install':
+        if os.geteuid() == 0:
+            raise ValueError('Install as the intended desktop user, never root')
+        dest = HOME / '.local/bin'
+        dest.mkdir(parents=True, exist_ok=True)
+        target = dest / 'family-lab'
+        if pathlib.Path(__file__).resolve() != target.resolve():
+            if target.exists():
+                raise ValueError('Already installed: review changes before replacing file')
+            shutil.copyfile(__file__, target)
+            target.chmod(0o700)
+        link = dest / 'ask-dad'
+        if not link.exists():
+            link.symlink_to('family-lab')
+        CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        if not CONFIG.exists():
+            CONFIG.write_text(json.dumps({'notify_alias':'family-helper-notify',
+                'view_aliases':{'learner-a':'family-learner-a-view',
+                                'learner-b':'family-learner-b-view'}}, indent=2)+'\n')
+        print('Installed. Configure SSH aliases; read docs before using.')
+    elif cmd == 'learn':
+        if os.environ.get('TMUX'):
+            raise ValueError('Start from a terminal outside tmux')
+        print('Sharing this learning terminal with your helper is available while it runs.\n'
+              'Only type things you are comfortable sharing. Use family-lab stop to end sharing.')
+        run(TMUX + ['new-session', '-A', '-s', 'learning'])
+    elif cmd == 'stop':
+        run(TMUX + ['kill-server'])
+    elif cmd == 'view':
+        # Forced command: never evaluate SSH_ORIGINAL_COMMAND.
+        os.execvp('tmux', TMUX + ['attach-session', '-r', '-t', '=learning'])
+    elif cmd == 'ask':
+        if len(args) != 1:
+            raise ValueError('Usage: ask-dad "message"')
+        run(TMUX + ['has-session', '-t', '=learning'], stdout=subprocess.DEVNULL)
+        payload = json.dumps({'message': message(args[0])}).encode()
+        run(ssh_args(config()['notify_alias']), input=payload, timeout=12)
+        print('Request accepted by the helper’s PC (not a read receipt).')
+    elif cmd == 'receive':
+        if len(args) != 1:
+            raise ValueError('Receiver needs one configured peer ID')
+        person = alias(args[0])
+        if person not in config()['view_aliases']:
+            raise ValueError('Unknown peer ID')
+        text = read_request()
+        STATE.mkdir(parents=True, exist_ok=True)
+        with (STATE / 'receive.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            stamp = STATE / (person + '.last')
+            now = time.time()
+            if stamp.exists() and now - float(stamp.read_text()) < 30:
+                raise ValueError('Please wait 30 seconds between requests')
+            queue = STATE / 'queue'
+            queue.mkdir(exist_ok=True)
+            if len(list(queue.glob('*.json'))) >= 20:
+                raise ValueError('Queue full; contact your helper directly')
+            target = queue / (uuid.uuid4().hex + '.json')
+            temp = target.with_suffix('.tmp')
+            temp.write_text(json.dumps({'person':person, 'message':text, 'time':now}))
+            temp.replace(target)
+            stamp.write_text(str(now))
+        print('Queued')
+    elif cmd == 'watch':
+        cfg = config()
+        # Run in the real helper's graphical login, not an SSH session.
+        if not os.environ.get('DBUS_SESSION_BUS_ADDRESS'):
+            raise ValueError('Run watch inside the helper’s graphical desktop terminal')
+        helper = shutil.which('omarchy-notification-send')
+        terminal = shutil.which('omarchy-launch-terminal')
+        if not helper or not terminal:
+            raise ValueError('Required Omarchy helpers missing; see compatibility gate')
+        STATE.mkdir(parents=True, exist_ok=True)
+        with (STATE / 'watch.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            queue = STATE / 'queue'
+            queue.mkdir(exist_ok=True)
+            print('Family Lab notifications active. Ctrl+C stops delivery.')
+            while True:
+                for item in sorted(queue.glob('*.json')):
+                    data = json.loads(item.read_text())
+                    if time.time() - data['time'] > 600:
+                        item.unlink()
+                        continue
+                    host = alias(cfg['view_aliases'][data['person']])
+                    # Native Omarchy action receives a fixed argv, never message text.
+                    run([helper, '--app-name', 'Family Lab', '-u', 'normal',
+                         'Help requested: ' + data['person'],
+                         html.escape(message(data['message'])) + '\nClick to open the shared terminal.',
+                         '--exec', terminal, 'ssh', '-tt', '-o', 'BatchMode=yes',
+                         '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', host],
+                        timeout=10)
+                    item.unlink()
+                time.sleep(1)
+    else:
+        raise ValueError('Unknown command')
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as exc:
+        print('Family Lab: ' + str(exc), file=sys.stderr)
+        sys.exit(1)
