@@ -26,3 +26,7 @@ The prototype does not provide content filtering, screen-time controls, browser 
 ## Public repository hygiene
 
 Only synthetic examples belong in Git. Keep runtime state, SSH directories, credentials, inventories, local configuration, private notes, dumps and captures outside this checkout. Ignore patterns are a convenience, not a secret scanner. Review every staged diff before committing, including tests and screenshots. If a real credential is published, revoke it immediately; deleting the file alone is insufficient.
+
+## Optional reporting boundary
+
+The reporting executable is disabled by default on learners. Imported observations are user-owned and not tamper-resistant. Report retrieval requires separately enrolled report-only forced-command keys; assistance credentials do not grant it. Reports are private files, not an encrypted archive; retention cleanup and access audit are not implemented. LocalSend is an explicit interactive export, not parent authentication. Remote Markdown must be viewed with active content and external resource loading disabled. See [reporting limitations](docs/REPORTING.md).

@@ -27,3 +27,5 @@ jobs:
         run: python3 tests/check_tmux.py
       - name: Verify consented control lifecycle
         run: python3 tests/check_control.py
+      - name: Verify optional Markdown reporting
+        run: python3 tests/check_reporting.py
