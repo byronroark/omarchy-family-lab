@@ -52,7 +52,7 @@ Rectangle {
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             textFormat: Text.PlainText
-            visible: card.state.phase === "time-up" || card.state.phase === "saving"
+            visible: card.state.phase === "time-up" || card.state.phase === "saving" || (card.state.phase === "blocked" && card.state.remaining > 0)
             text: DinoFlow.countdown(card.state.remaining)
             color: Color.accent
             font { family: Style.font.family; pixelSize: Style.font.subtitle * 2; bold: true }

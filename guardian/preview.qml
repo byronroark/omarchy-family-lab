@@ -10,7 +10,7 @@ Window {
     visible: true
     title: "Family Lab Dino - design preview only"
     color: Color.notifications.background
-    property var previewState: ({version: 1, phase: "time-up", remaining: 120,
+    property var previewState: ({version: 1, phase: "time-up", remaining: 300,
                                 nextLabel: "Example schedule - Sunday 09:00 local time", helpers: ["mom", "dad"]})
     Timer {
         interval: 1000

@@ -22,7 +22,7 @@ ShellRoot {
             id: card
             anchors.centerIn: parent
             width: 720
-            state: ({version: 1, phase: "time-up", remaining: 120, nextLabel: "Example Sunday 09:00 UTC", helpers: ["mom", "dad"]})
+            state: ({version: 1, phase: "time-up", remaining: 300, nextLabel: "Example Sunday 09:00 UTC", helpers: ["mom", "dad"]})
         }
     }
     Timer {
@@ -34,7 +34,7 @@ ShellRoot {
             }
             card.grabToImage(function(result) {
                 result.saveToFile(Quickshell.env("FAMILY_LAB_PREVIEW_DIR") + "/dino-time-up.png")
-                card.state = {version: 1, phase: "blocked", remaining: 0, nextLabel: "Example Sunday 09:00 UTC", helpers: ["dad"]}
+                card.state = {version: 1, phase: "blocked", remaining: 300, nextLabel: "Example Sunday 09:00 UTC", helpers: ["dad"]}
                 finish.start()
             })
         }

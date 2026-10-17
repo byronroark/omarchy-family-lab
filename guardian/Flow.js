@@ -44,3 +44,12 @@ function tick(state, elapsed) {
     if ((next.phase === "saving" || next.phase === "time-up") && next.remaining === 0) next.phase = "blocked"
     return next
 }
+
+// Synthetic resume fixture only. A trusted wake event must own this in production.
+// Staying blocked never restores the desktop or creates another save grant.
+function wakeBlocked(state) {
+    var next = JSON.parse(JSON.stringify(state))
+    next.phase = "blocked"
+    next.remaining = 300
+    return next
+}
