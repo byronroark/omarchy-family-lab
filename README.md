@@ -59,3 +59,7 @@ See [contributing](CONTRIBUTING.md) and the [roadmap](docs/ROADMAP.md). Routing/
 Published material must contain synthetic examples only. Never contribute private keys, personal configuration, household details, logs, chat transcripts, screenshots with personal information, or hardware inventories.
 
 MIT licensed. No official compatibility or security certification is implied.
+
+## Optional reporting and parental-control roadmap
+
+The experimental [Markdown reporting foundation](docs/REPORTING.md) supports explicit observation imports, separate report-only SSH retrieval, and optional interactive LocalSend sharing. It does not yet collect activity automatically or enforce restrictions. See the [parental-control implementation sequence](docs/PARENTAL_CONTROLS.md) for child-local policy management, monitoring, schedules, filtering, and parent UI plans.

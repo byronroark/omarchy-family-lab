@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Optional, local Markdown reports. No automatic surveillance or network listeners."""
+import datetime as dt
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+os.umask(0o077)
+ROOT = Path.home() / '.local/state/family-lab/reporting'
+CONFIG = Path.home() / '.config/family-lab/config.json'
+LIMIT = 2 * 1024 * 1024
+
+def cfg():
+    return json.loads(CONFIG.read_text()).get('reporting', {})
+
+def enabled():
+    if cfg().get('enabled') is not True:
+        raise ValueError('Reporting is disabled. Enable it explicitly after reading REPORTING.md.')
+
+def plain(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 120 or not all(c.isprintable() for c in value):
+        raise ValueError('Invalid observation label')
+    return value
+
+def cell(value):
+    # HTML and Markdown from activity sources must remain literal text.
+    import html
+    return html.escape(value).replace('\\', '&#92;').replace('|', '&#124;').replace('`', '&#96;').replace('[', '&#91;').replace(']', '&#93;').replace('*', '&#42;').replace('_', '&#95;')
+
+def date(value):
+    return dt.date.fromisoformat(value)
+
+def validate(data):
+    if not isinstance(data, dict) or set(data) != {'schema', 'coverage', 'observations'} or type(data['schema']) is not int or data['schema'] != 1:
+        raise ValueError('Expected schema 1 observation document')
+    plain(data['coverage'])
+    rows = data['observations']
+    if not isinstance(rows, list) or len(rows) > 10000:
+        raise ValueError('Too many observations')
+    last = None
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {'start', 'end', 'app', 'domain', 'category'}:
+            raise ValueError('Invalid observation fields')
+        start, end = (dt.datetime.fromisoformat(row[key]) for key in ('start', 'end'))
+        if start.utcoffset() is None or end.utcoffset() is None or not 0 < (end-start).total_seconds() <= 86400:
+            raise ValueError('Use timezone-aware intervals no longer than one day')
+        if last is not None and start < last:
+            raise ValueError('Intervals must be sorted and cannot overlap (foreground time counted once)')
+        last = end
+        plain(row['app']); plain(row['category'])
+        domain = row['domain']
+        if domain is not None and (not isinstance(domain, str) or len(domain) > 253 or not re.fullmatch(r'[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?', domain)):
+            raise ValueError('Use a lowercase domain only, never a URL or search query')
+    return data
+
+def load():
+    path = ROOT / 'observations.json'
+    if not path.exists():
+        return {'schema': 1, 'coverage': 'No collector or imported observations available', 'observations': []}
+    if path.stat().st_size > LIMIT:
+        raise ValueError('Observation file too large')
+    return validate(json.loads(path.read_text()))
+
+def render(first, last):
+    enabled()
+    start, end = date(first), date(last)
+    if not 0 <= (end-start).days <= 30:
+        raise ValueError('Choose an inclusive range of at most 31 days')
+    data = load()
+    totals = {'Applications': {}, 'Websites (estimated foreground time)': {}, 'Categories': {}}
+    seconds = 0
+    for row in data['observations']:
+        a, b = (dt.datetime.fromisoformat(row[key]) for key in ('start', 'end'))
+        # Report dates use UTC consistently, regardless of either PC timezone.
+        lo = dt.datetime.combine(start, dt.time(), dt.timezone.utc)
+        hi = dt.datetime.combine(end + dt.timedelta(days=1), dt.time(), dt.timezone.utc)
+        duration = max(0, (min(b, hi)-max(a, lo)).total_seconds())
+        if not duration:
+            continue
+        seconds += duration
+        for title, label in [('Applications', row['app']), ('Categories', row['category']), ('Websites (estimated foreground time)', row['domain'])]:
+            if label:
+                totals[title][label] = totals[title].get(label, 0) + duration
+    lines = ['# Family Lab activity report', '', f'Period: {start} through {end} (UTC; inclusive)', '',
+             '**Private household report — share deliberately.**', '',
+             f'Coverage: {cell(data["coverage"])}', '',
+             f'Observed foreground time: **{seconds/60:.1f} minutes**', '',
+             'Missing data is unknown, not zero usage. Imports are observations, not proof of attention or learning.',
+             'No terminal commands, page contents, search terms, or full URLs are collected by this module.',
+             'Website time is included in application time; do not add these tables together.', '']
+    for title, values in totals.items():
+        lines += [f'## {title}', '', '| Activity | Minutes | Share of observed time |', '| --- | ---: | --- |']
+        for label, count in sorted(values.items(), key=lambda item: (-item[1], item[0])):
+            ratio = count/seconds if seconds else 0
+            lines.append(f'| {cell(label)} | {count/60:.1f} | {"█" * round(ratio*20)} {ratio:.0%} |')
+        if not values:
+            lines.append('| No observations available | — | Unknown |')
+        lines.append('')
+    return '\n'.join(lines) + '\n'
+
+def save(text):
+    ROOT.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix='report-', suffix='.md', dir=ROOT)
+    with os.fdopen(fd, 'w') as output:
+        output.write(text)
+    return Path(name)
+
+def main(args):
+    if not args:
+        raise ValueError('Usage: family-lab-report import FILE | generate START END | request PEER START END | serve HELPER | share REPORT.md')
+    cmd, *args = args
+    if cmd == 'import' and len(args) == 1:
+        enabled()
+        source = Path(args[0])
+        if source.stat().st_size > LIMIT:
+            raise ValueError('Import too large')
+        data = validate(json.loads(source.read_text()))
+        ROOT.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=ROOT)
+        with os.fdopen(fd, 'w') as output:
+            json.dump(data, output)
+        os.replace(name, ROOT / 'observations.json')
+        print('Replaced local observations; no automatic collection enabled.')
+    elif cmd == 'generate' and len(args) == 2:
+        print(save(render(*args)))
+    elif cmd == 'serve' and len(args) == 1:
+        enabled()
+        if args[0] not in cfg().get('allowed_helpers', []):
+            raise ValueError('Helper not enrolled for reporting')
+        # Forced SSH command fixes helper identity; ignore SSH_ORIGINAL_COMMAND.
+        import select
+        raw = b''
+        import time
+        deadline = time.monotonic()+5
+        while True:
+            if not select.select([0], [], [], max(0, deadline-time.monotonic()))[0]:
+                raise ValueError('Request timed out')
+            chunk = os.read(0, 513-len(raw))
+            raw += chunk
+            if len(raw) > 512:
+                raise ValueError('Request too large')
+            if not chunk:
+                break
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {'start', 'end'}:
+            raise ValueError('Expected start/end dates only')
+        print(render(request['start'], request['end']), end='')
+    elif cmd == 'request' and len(args) == 3:
+        peer, first, last = args
+        date(first); date(last)
+        host = cfg().get('report_aliases', {}).get(peer)
+        if not isinstance(host, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', host):
+            raise ValueError('No separately enrolled report SSH alias')
+        # Bound remote output on disk, never accumulate unbounded stdout in memory.
+        with tempfile.TemporaryFile() as output:
+            import resource
+            def limits():
+                resource.setrlimit(resource.RLIMIT_FSIZE, (LIMIT, LIMIT))
+            subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', host],
+                           input=json.dumps({'start': first, 'end': last}).encode(), stdout=output, check=True, timeout=20, preexec_fn=limits)
+            output.seek(0)
+            text = output.read(LIMIT+1).decode('utf-8')
+        if len(text.encode()) > LIMIT or not text.startswith('# Family Lab activity report\n'):
+            raise ValueError('Invalid report response')
+        # Untrusted remote Markdown must be opened in a safe viewer (documented).
+        print(save(text))
+    elif cmd == 'share' and len(args) == 1:
+        path = Path(args[0]).resolve()
+        if path.parent != ROOT.resolve() or path.suffix != '.md' or not path.is_file() or path.stat().st_size > LIMIT:
+            raise ValueError('Choose a generated report from the private reporting directory')
+        client = shutil.which('localsend-cli')
+        if not client:
+            raise ValueError('Compatible localsend-cli missing. Share the saved file manually in LocalSend.')
+        # Interactive destination selection and normal receiver acceptance; no auto-accept.
+        subprocess.run([client, 'send', str(path)], check=True)
+    else:
+        raise ValueError('Invalid command or arguments')
+
+if __name__ == '__main__':
+    try:
+        main(sys.argv[1:])
+    except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        print('Report error: ' + str(error), file=sys.stderr)
+        sys.exit(1)

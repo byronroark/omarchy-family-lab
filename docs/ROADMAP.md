@@ -25,3 +25,7 @@ A plugin must not become a general remote-command executor, collect administrato
 Prepare a narrowly scoped proposal, security model, demonstrated acceptance results, license, documented maintenance commitment and plugin package. Ask maintainers which contribution/distribution path they support. Adopt their current conventions and review process. Only describe the project as official if the maintainers explicitly accept and authorize that status.
 
 Application-specific setup, GPU drivers and unidentified third-party plugins stay outside the core. Optional future guides must use verified sources and must never bundle personal inventories or credentials.
+
+## Modular parental controls and reporting
+
+See [the staged implementation sequence](PARENTAL_CONTROLS.md). Markdown reporting now has a separate experimental CLI with imported observations and optional LocalSend sharing; automatic activity collection and parental enforcement remain planned.
