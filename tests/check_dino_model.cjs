@@ -5,13 +5,16 @@ const path = require('node:path');
 const model = {};
 vm.createContext(model);
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../guardian/Flow.js'), 'utf8').replace(/^\.pragma library\s*/, ''), model);
-const initial = {version: 1, phase: 'time-up', remaining: 180, nextLabel: 'Example Sunday 09:00 UTC', helpers: ['dad']};
+const initial = {version: 1, phase: 'time-up', remaining: 120, nextLabel: 'Example Sunday 09:00 UTC', helpers: ['dad']};
 const state = model.parse(JSON.stringify(initial));
 assert(model.permitted(state, 'save'));
 assert(!model.permitted(state, 'ask-mom'));
 assert(!model.permitted(state, 'sudo'));
 assert(!model.permitted({...state, phase: 'unknown'}, 'sleep'));
-const saving = model.advance(state, 'save');
+const late = model.tick(state, 119);
+assert.equal(late.phase, 'time-up');
+assert.equal(late.remaining, 1);
+const saving = model.advance(late, 'save');
 assert.equal(saving.remaining, 180);
 assert.equal(state.phase, 'time-up');
 assert.throws(() => model.advance(saving, 'save'));
@@ -19,9 +22,14 @@ assert.equal(model.tick(saving, 179).remaining, 1);
 const expired = model.tick(saving, 180);
 assert.equal(expired.phase, 'blocked');
 assert(!model.permitted(expired, 'save'));
-assert.equal(model.tick(initial, 180).phase, 'blocked'); // No click still expires.
+assert.equal(model.tick(initial, 120).phase, 'blocked'); // No click still expires.
+const asked = model.advance(model.tick(state, 60), 'ask-dad');
+assert.equal(asked.remaining, 60);
+assert.equal(model.tick(asked, 60).phase, 'blocked');
+assert.throws(() => model.advance(model.tick(initial, 120), 'save'));
+assert.equal(model.advance(state, 'sleep').remaining, 0);
 assert.equal(model.countdown(61), '1:01');
 for (const change of [{version: 2}, {phase: 'unlock'}, {remaining: -1}, {remaining: 601}, {helpers: ['admin']}])
     assert.throws(() => model.parse(JSON.stringify({...initial, ...change})));
 assert.throws(() => model.tick(saving, -1));
-console.log('PASS: Dino phases, fixed actions, one save transition, no added time, absent helper, automatic expiry and countdown');
+console.log('PASS: Dino phases, fixed actions, one three-minute save transition, absent helper, two-minute automatic expiry and countdown');

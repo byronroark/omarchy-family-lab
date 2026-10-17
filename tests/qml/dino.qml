@@ -22,7 +22,7 @@ ShellRoot {
             id: card
             anchors.centerIn: parent
             width: 720
-            state: ({version: 1, phase: "time-up", remaining: 180, nextLabel: "Example Sunday 09:00 UTC", helpers: ["mom", "dad"]})
+            state: ({version: 1, phase: "time-up", remaining: 120, nextLabel: "Example Sunday 09:00 UTC", helpers: ["mom", "dad"]})
         }
     }
     Timer {

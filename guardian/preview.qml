@@ -10,7 +10,7 @@ Window {
     visible: true
     title: "Family Lab Dino - design preview only"
     color: Color.notifications.background
-    property var previewState: ({version: 1, phase: "time-up", remaining: 180,
+    property var previewState: ({version: 1, phase: "time-up", remaining: 120,
                                 nextLabel: "Example schedule - Sunday 09:00 local time", helpers: ["mom", "dad"]})
     Timer {
         interval: 1000
@@ -34,8 +34,7 @@ Window {
             width: parent.width
             state: previewState
             onActionRequested: function(action) {
-                if (action === "save") previewState = Object.assign({}, previewState, {phase: "saving"})
-                if (action === "sleep") previewState = Object.assign({}, previewState, {phase: "blocked", remaining: 0})
+                previewState = DinoFlow.advance(previewState, action)
             }
         }
     }

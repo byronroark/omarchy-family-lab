@@ -43,7 +43,7 @@ Rectangle {
             color: Color.notifications.text
             font { family: Style.font.family; pixelSize: Style.font.body }
             text: card.state.phase === "saving" ? "Save your files and finish up before your PC rests." :
-                  card.state.phase === "time-up" ? "Great exploring today! You have a little time to save your work." :
+                  card.state.phase === "time-up" ? "Great exploring today! Rest starts when this countdown ends. Choose three minutes to save your work." :
                   card.state.phase === "warning" ? "You have a few minutes left. Start saving your work." :
                   card.state.phase === "hibernate-error" ? "Your PC could not hibernate. Please ask a parent for help." :
                   "Today's exploring is finished. Your saved files are still on this PC."
@@ -74,7 +74,7 @@ Rectangle {
                 delegate: Ui.Button {
                     required property string modelData
                     visible: DinoFlow.permitted(card.state, modelData)
-                    text: modelData === "sleep" ? "Hibernate now" : modelData === "save" ? "Use save time" : modelData === "ask-mom" ? "Ask Mom" : "Ask Dad"
+                    text: modelData === "sleep" ? "Hibernate now" : modelData === "save" ? "Save work (3 min)" : modelData === "ask-mom" ? "Ask Mom" : "Ask Dad"
                     onClicked: card.actionRequested(modelData)
                 }
             }

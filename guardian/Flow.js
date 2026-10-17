@@ -27,8 +27,14 @@ function permitted(state, action) {
 function advance(state, action) {
     if (!permitted(state, action)) throw new Error("Action unavailable")
     var next = JSON.parse(JSON.stringify(state))
-    if (action === "save") next.phase = "saving" // Never add time or change the deadline.
-    if (action === "sleep") next.phase = "blocked" // Preview transition only; no power call.
+    if (action === "save") {
+        next.phase = "saving"
+        next.remaining = 180 // One explicit save period; unavailable after this transition.
+    }
+    if (action === "sleep") {
+        next.phase = "blocked" // Preview transition only; no power call.
+        next.remaining = 0
+    }
     return next
 }
 function tick(state, elapsed) {

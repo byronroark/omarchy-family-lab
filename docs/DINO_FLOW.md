@@ -6,7 +6,7 @@ This change implements the **presentation prototype and next-permitted-time fore
 
 - Original mint-green pixel dinosaur drawn in QML code, inspired by a friendly baby-dinosaur style. No external image, remote asset or tracking.
 - Theme-bound card states: five-minute warning, time-up/save prompt, saving countdown, blocked and hibernation error. Fixed action signals only: sleep, save, ask-mom and ask-dad.
-- A pure presentation model: one save transition, no extra seconds added, automatic expiry even without a click, and no second save action after entering saving/blocked. This model is not an authorization boundary.
+- A pure presentation model: a two-minute no-response countdown, one explicit three-minute save period from the click, automatic expiry, and no second save action after entering saving/blocked. Asking a parent leaves the countdown running; only an approved exception should change real permission. Choosing save near the end can make the total finish-up period almost five minutes. This model is not an authorization boundary.
 - Policy service `next_allowed` metadata for a blocked learner, using its actual timezone, windows, daily totals and already-approved extra minutes. Real UTC-minute iteration handles missing/repeated local times at DST. The search covers the next eight days; no result is shown as “ask a parent,” not an invented reopening time. Pending requests and future policy changes cannot be predicted.
 - New policy defaults use a 180-second grace. **Existing policies retain their configured grace**; this does not migrate a family's allowance or modify installed files.
 - Read-only `parental/family-lab-policy hibernation-check` probes logind's CanHibernate. Even “yes” returns `ready_for_family_lab: false`: a real driver/swap/resume test and secure guard integration are still required. It never calls Hibernate, systemctl hibernate, suspend or shutdown.
@@ -29,12 +29,18 @@ The last test uses an isolated temporary home/offscreen backend, imports the ins
 
 ## Required next integration
 
-1. Persist a root-authoritative finish episode/deadline. The three-minute save action must not renew that deadline, and restart/resume/repeated clicks must not create another grant. Parent-approved exceptions remain separate.
+1. Persist a root-authoritative finish episode with a two-minute initial deadline and one available save action. That action may replace the initial deadline with three minutes from its first accepted click, once only. Restart/resume/repeated clicks must not create another grant. Parent-approved exceptions remain separate.
 2. Establish a protected lock/resume surface and a restricted fresh-login path. An ordinary fullscreen QML window is dismissible and not enforcement. Authentication must use the real PAM/lock integration; do not collect passwords in this prototype. A correct password must not expose desktop content while policy remains blocked.
 3. Add a narrowly authenticated learner action channel for the selected subject. A learner may acknowledge/save/request help, never change limits, approve their own exception or invoke arbitrary root power commands. Display actions only for actually enrolled helper routes.
 4. Replace termination only behind an explicit verified end-action choice. On the child's dedicated PC, lock before hibernating, then check policy again before unlocking on resume. Do not close the session first. If hibernation fails, retain the protected surface and report the error; no silent poweroff fallback. Never hibernate Mom's adult workstation as a side effect of her helper role.
 5. Test actual GTX 1050 Ti hibernate/resume, encrypted swap/resume configuration, normal password authentication, screen privacy during transitions, PC waking before/after permitted time, offline parents, clock/DST changes and local admin recovery. CanHibernate alone is insufficient.
 6. Implement the matching website page separately through a reviewed browser integration. Chromium URLBlocklist remains authoritative until a tested adapter can present the friendly page without bypassing enforcement or inspecting page contents/search terms. No custom website page is implemented here.
+
+## Planned wake behavior
+
+Before sleeping, the protected guard must already cover the learner session. Waking during blocked hours must return to that guard, showing the next permitted date/time, Hibernate now and the enrolled Ask Mom/Dad actions. A correct account password confirms identity; it does not grant more screen time. The desktop must remain concealed until both authentication and current policy allow access. Resume is an existing session, so a fresh-login PAM check alone does not provide this.
+
+The same finish episode survives wake/restart: waking must not provide another three-minute save option. Parent approval can allow an exception. If the next session is already permitted, normal authentication can restore access. This behavior, including actual automatic hibernation, still requires the protected guard and hardware acceptance tests above; the preview only changes its displayed phase.
 
 ## Wording and guarantees
 
