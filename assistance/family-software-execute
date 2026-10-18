@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""Fixed parent-authenticated actions from a private parent-owned snapshot."""
+import datetime,fcntl,json,os,pathlib,pwd,re,signal,subprocess,sys
+from family_software import read_private,result_path
+os.umask(0o077)
+def secure(path,owner=0):
+    for item in (path,*path.parents):
+        st=item.lstat()
+        if item.is_symlink() or st.st_uid!=owner or st.st_mode&0o022:raise ValueError('Unsafe managed path: '+str(item))
+def main():
+    if os.geteuid()!=0:sys.exit('Parent administrator authentication required')
+    cfg_path=pathlib.Path('/etc/family-help/teaching.json');secure(cfg_path);cfg=json.loads(cfg_path.read_text())
+    if os.environ.get('SUDO_USER')!=cfg['admin'] or not os.isatty(0):sys.exit('Use the private parent administrator terminal')
+    if len(sys.argv)!=3 or sys.argv[1] not in ('approve','deny') or not re.fullmatch('[a-f0-9]{32}',sys.argv[2]):sys.exit('Invalid action or ID')
+    choice,identifier=sys.argv[1:];parent=pwd.getpwnam(cfg['admin'])
+    folder=pathlib.Path(parent.pw_dir)/'.local/state/family-help/approvals'
+    # Parent-owned ancestors; the child must never be able to replace an approval.
+    for item in (folder,*list(folder.parents)[:4]):
+        st=item.lstat()
+        if item.is_symlink() or st.st_uid!=parent.pw_uid or st.st_mode&0o022:raise ValueError('Unsafe parent approval directory')
+    request=read_private(folder/(identifier+'.json'),parent.pw_uid)
+    if request['id']!=identifier:sys.exit('Approval ID mismatch')
+    software=request['software']
+    results=pathlib.Path('/var/lib/family-software/results');secure(results)
+    audits=pathlib.Path('/var/lib/family-software/audit');secure(audits)
+    lock=(audits/'action.lock').open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    receipt=audits/(identifier+'.json')
+    if receipt.exists():sys.exit('This request was already decided. Ask again for another attempt.')
+    def record(status,code=None):
+        value={'id':identifier,'status':status,'returncode':code,'time':datetime.datetime.now(datetime.timezone.utc).isoformat()}
+        receipt.write_text(json.dumps(dict(value,request=request)))
+        temp=results/(identifier+'.tmp');temp.write_text(json.dumps(value));temp.chmod(0o644);temp.replace(result_path(identifier))
+    if choice=='deny':record('denied');print('Denied. Your child can see the result.');return
+    env={'HOME':'/root','USER':'root','LOGNAME':'root','PATH':'/usr/bin:/bin','LANG':'C.UTF-8','TERM':'xterm-256color','OMARCHY_PATH':'/usr/share/omarchy'}
+    if software['action']=='menu':
+        from family_menu import CATALOG,plan
+        secure(CATALOG)
+        try:
+            item,packages=plan(software['menu'])
+            print('Menu action:',software['menu'],'\nName:',item['title'],'\nHandling:',item['mode'],flush=True)
+            if item.get('notice'):print(item['notice'],flush=True)
+            if item['mode']=='manual':print('Manual review only. No installer will execute.',flush=True)
+            for package in packages:subprocess.run(['/usr/bin/pacman','-Si','--',package],env=env,cwd='/root',check=True)
+            print('Personal configuration will run as the enrolled learner, without sudo. No automatic reboot.',flush=True)
+        except BaseException:
+            record('failed',1);raise
+        command=None
+    elif software['action']=='install':
+        for package in software['packages']:
+            subprocess.run(['/usr/bin/pacman','-Si','--',package],env=env,cwd='/root',check=True)
+        command=['/usr/bin/pacman','-S','--needed','--',*software['packages']]
+        print('Approve only the displayed repository packages and their package-manager transaction. No files, arbitrary flags or AUR scripts are accepted.',flush=True)
+    else:
+        command=['/usr/bin/runuser','-u',parent.pw_name,'--','/usr/bin/env','-C',parent.pw_dir,'-i','HOME='+parent.pw_dir,'USER='+parent.pw_name,'LOGNAME='+parent.pw_name,'PATH=/usr/local/sbin:/usr/local/bin:/usr/bin','TERM=xterm-256color','LANG=C.UTF-8','/usr/local/bin/family-update']
+    if input('Type approve to proceed, or anything else to deny: ').strip()!='approve':record('denied');return
+    # An interrupted job remains decided; it cannot silently replay on the next click.
+    record('running')
+    code=1
+    try:
+        if software['action']=='menu':
+            from family_menu import run
+            status,code=run(software['menu'],cfg,env)
+        else:
+            code=subprocess.run(command,env=env,cwd='/root',close_fds=True).returncode
+            status='completed' if code==0 else 'failed'
+        record(status,code)
+    except BaseException:
+        record('interrupted',code);raise
+    print('Request result:',status,flush=True)
+    if status=='manual-review':sys.exit(78)
+    if code:sys.exit(code)
+if __name__=='__main__':
+    try:main()
+    except (OSError,ValueError,subprocess.SubprocessError) as exc:sys.exit(str(exc))

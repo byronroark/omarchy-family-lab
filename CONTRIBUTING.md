@@ -34,3 +34,9 @@ Add meaningful tests for changed security boundaries. Record multi-PC acceptance
 - Follow SECURITY.md for vulnerabilities instead of public disclosure.
 
 Use your GitHub-provided no-reply commit email if you do not want your personal email in public history. Official Omarchy integration requires upstream review; project contributors must not imply endorsement.
+
+## Polling deployment and enrollment checks
+
+Run `python3 tests/check_enrollment.py`, `python3 tests/check_desktop_setup.py`, `python3 tests/check_software_approval.py`, `python3 tests/check_menu_approvals.py`, `/usr/bin/python3 tests/check_help_widget.py` and `python3 tests/check_teaching_control.py`. Screenshot checks require PyGObject/GdkPixbuf; the teaching check needs a local PTY and temporary tmux socket. These do not use real SSH credentials, sudo, human account creation, package installation or live desktop configuration. Optional `tests/check_ask_dad_bar_qml.py` renders the bar widget headlessly against an installed Omarchy runtime.
+
+Keep full two-PC acceptance distinct from isolated tests. The new enrollment orchestrator is not yet verified as a clean-machine rollout. Do not add private setup profiles, enrollment bundles or real request fixtures to Git.

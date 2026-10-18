@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Unprivileged package chooser and request status; never invokes sudo."""
+import fcntl,json,os,pathlib,subprocess,sys,time,uuid
+from family_software import validate_software,result_path
+os.umask(0o077)
+cfg=json.loads(pathlib.Path('/etc/family-help/child.json').read_text())
+if os.getuid()!=cfg['uid']:sys.exit('Use the enrolled learner account')
+state=pathlib.Path(cfg['state']);state.mkdir(mode=0o700,parents=True,exist_ok=True)
+if state.is_symlink() or state.stat().st_uid!=os.getuid():sys.exit('Unsafe request directory')
+def main():
+    if len(sys.argv)<2 or sys.argv[1] not in ('install','update','menu'):sys.exit('Choose install, update or a registered menu action')
+    action=sys.argv[1];packages=sys.argv[2:]
+    if action=='install' and not packages:
+        listing=subprocess.check_output(['/usr/bin/pacman','-Sl'],text=True)
+        choices='\n'.join(row.split()[0]+'/'+row.split()[1] for row in listing.splitlines() if len(row.split())>=3)
+        selected=subprocess.run(['/usr/bin/fzf','--multi','--prompt=Ask Dad to install > ','--header=Select up to 5 packages; Tab selects; Enter requests approval'],input=choices,text=True,stdout=subprocess.PIPE)
+        if selected.returncode:return
+        packages=selected.stdout.splitlines()
+    if action=='menu':
+        if len(packages)!=1:sys.exit('Choose one registered menu action')
+        from family_menu import entry
+        item=entry(packages[0]);software=validate_software({'action':'menu','packages':[],'menu':packages[0]})
+        message='Please review: '+item['title']
+    else:
+        software=validate_software({'action':action,'packages':packages})
+        message='Please approve '+('the family system update' if action=='update' else 'these repository packages')
+    with (state/'ask.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX)
+        path=state/'request.json'
+        try:previous=json.loads(path.read_text())
+        except (OSError,ValueError):previous={}
+        if time.time()-previous.get('time',0)<30:sys.exit('Please wait 30 seconds between requests')
+        request={'id':uuid.uuid4().hex,'time':time.time(),'message':message,'topic':'admin','software':software}
+        temp=state/('request.'+uuid.uuid4().hex+'.tmp');temp.write_text(json.dumps(request));temp.replace(path)
+    print('Requested Dad’s approval. No administrator permission has been granted.\nKeep this window open for the result; Ctrl+C only closes this status view.',flush=True)
+    deadline=time.monotonic()+1800;last_status=None
+    while time.monotonic()<deadline:
+        try:result=json.loads(result_path(request['id']).read_text())
+        except (OSError,ValueError):result={}
+        if result:
+            if result.get('status')!=last_status:print('Status: '+result.get('status','unknown'),flush=True)
+            last_status=result.get('status')
+            if result.get('status') in ('completed','failed','denied','interrupted','manual-review'):
+                if result.get('status')=='manual-review':print('Dad received the review request. No installer was run; arrange help with Dad.')
+                print('Return code:',result.get('returncode','not applicable'));input('Press Enter to close. ');return
+        elif time.time()-request['time']>900:
+            print('No approval received before expiry. Ask again when Dad is available.');input('Press Enter to close. ');return
+        time.sleep(3)
+    print('Still waiting. Ask Dad for progress; closing this view does not stop a running update.')
+try:main()
+except (OSError,ValueError,subprocess.SubprocessError) as exc:sys.exit(str(exc))

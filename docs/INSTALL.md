@@ -1,4 +1,6 @@
-# Staged installation
+# Staged installation: original push prototype
+
+**For the newer Ask Dad widget/software-approval polling deployment, use [ENROLLMENT.md](ENROLLMENT.md). Do not complete these older steps over that deployment: the aliases and SSH transport differ.**
 
 This is a manual, reviewable prototype installation. Replace angle-bracket placeholders locally. Never commit the completed configuration. Keep local console recovery and an existing administrator connection available while adjusting SSH.
 

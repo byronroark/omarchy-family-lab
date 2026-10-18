@@ -1,0 +1,60 @@
+#!/usr/bin/python3
+"""Parent-authenticated, short-lived admin demonstration with a server-enforced read-only viewer."""
+import fcntl,json,os,pathlib,pwd,signal,subprocess,sys,time,uuid
+cfg=json.loads(pathlib.Path('/etc/family-help/teaching.json').read_text())
+runtime=pathlib.Path('/run/family-help-demo'); sock=str(runtime/'tmux.sock')
+TMUX=['/usr/bin/tmux','-S',sock,'-f','/dev/null']
+def run(*args,**kw): return subprocess.run(*args,check=True,**kw)
+mode=sys.argv[1] if len(sys.argv)==2 else ''
+if mode=='view':
+    if os.getuid()!=pwd.getpwnam(cfg['viewer']).pw_uid: sys.exit('Viewer account required')
+    # Independent server-side UID ACL is read-only, even if a client flag is bypassed.
+    # UID is already server-enforced read-only. tmux 3.7 rejects redundant -r
+    # for a cross-UID client; omit it without changing the server access rule.
+    os.execv(TMUX[0],TMUX+['attach-session','-E','-t','=admin-demo'])
+if mode!='start' or os.geteuid()!=0 or os.environ.get('SUDO_USER')!=cfg['admin']:
+    sys.exit('Start from the parent administrator SSH terminal using sudo')
+if not os.isatty(0): sys.exit('Private interactive parent terminal required')
+os.umask(0o077)
+runtime.mkdir(mode=0o755,exist_ok=True)
+if runtime.is_symlink() or runtime.stat().st_uid!=0: sys.exit('Unsafe runtime directory')
+os.chmod(runtime,0o755)
+lock=(runtime/'owner.lock').open('a')
+try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+except BlockingIOError: sys.exit('An admin demonstration is already running')
+# A disconnected parent cannot leave an elevated demonstration alive.
+for sig in (signal.SIGHUP,signal.SIGTERM,signal.SIGINT):
+    signal.signal(sig,lambda *_:sys.exit(0))
+active=runtime/'active.json'; child=None; started=False
+try:
+    # Dedicated server has no other sessions or parent secrets.
+    if subprocess.run(TMUX+['has-session'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0:
+        sys.exit('Unexpected existing server: parent must inspect it')
+    run(TMUX+['new-session','-d','-s','admin-demo','-n','Admin demonstration','-x','100','-y','30',
+        '/usr/bin/env','-i','HOME=/root','USER=root','LOGNAME=root','PATH=/usr/local/sbin:/usr/local/bin:/usr/bin',
+        'TERM=tmux-256color','PS1=ADMIN DEMO \\u@\\h:\\w# ','/usr/bin/timeout','--signal=HUP','--kill-after=3','900','/usr/bin/bash','--noprofile','--norc'])
+    started=True
+    run(TMUX+['set-option','-g','update-environment',''])
+    run(TMUX+['set-option','-g','status-right','PARENT ADMIN | CHILD READ ONLY | exit or detach ENDS demo'])
+    run(TMUX+['set-option','-g','status-right-length','100'])
+    run(TMUX+['server-access','-a',cfg['admin']])
+    run(TMUX+['server-access','-a',cfg['viewer']])
+    run(TMUX+['server-access','-r',cfg['viewer']])
+    # Only these UIDs can reach the root-owned socket. The learner UID is excluded.
+    run(['/usr/bin/setfacl','-m','u:'+cfg['admin']+':rw,u:'+cfg['viewer']+':rw',sock])
+    active.write_text(json.dumps({'id':uuid.uuid4().hex,'started':time.time(),'expires':time.time()+900}))
+    active.chmod(0o644)
+    print('Admin demonstration: your child can watch but cannot type.\n'
+          'Only type work intended for them to see. Do not enter secrets here.\n'
+          'Exit or detach to END the demonstration; maximum duration is 15 minutes.',flush=True)
+    child=subprocess.Popen(['/usr/bin/runuser','-u',cfg['admin'],'--',*TMUX,'attach-session','-E','-t','=admin-demo'])
+    try: child.wait(timeout=900)
+    except subprocess.TimeoutExpired: print('Demonstration time limit reached.',flush=True)
+finally:
+    active.unlink(missing_ok=True)
+    if child is not None and child.poll() is None:
+        child.terminate()
+        try: child.wait(timeout=3)
+        except subprocess.TimeoutExpired: child.kill(); child.wait()
+    if started:
+        subprocess.run(TMUX+['kill-server'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

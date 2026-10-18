@@ -1,0 +1,36 @@
+#!/bin/bash
+# Run as the normal parent administrator, never inside the root demo.
+set -euo pipefail
+expected=$(/usr/bin/python3 -c 'import json; print(json.load(open("/etc/family-help/teaching.json"))["admin"])')
+if [[ $(id -un) != "$expected" || $EUID == 0 ]]; then
+  echo 'Run from the normal parent administrator SSH shell, outside ADMIN DEMO.' >&2
+  exit 1
+fi
+case "${1:-}" in
+  status) exec sudo /usr/local/sbin/family-migrate-child plan ;;
+  finish) exec sudo /usr/local/sbin/family-migrate-child apply ;;
+  '') ;;
+  *) echo 'Usage: family-update [status|finish]' >&2; exit 2 ;;
+esac
+if /usr/bin/python3 - <<'PY'
+import pathlib,sys
+for path in pathlib.Path('/proc').glob('[0-9]*/cmdline'):
+ try:args=path.read_bytes().split(b'\0')
+ except OSError:continue
+ if any(pathlib.PurePosixPath(x.decode(errors='replace')).name in ('omarchy-update','pacman','dkms','mkinitcpio') for x in args[:3]):sys.exit(0)
+sys.exit(0 if pathlib.Path('/var/lib/pacman/db.lck').exists() else 1)
+PY
+then
+  echo 'Another update or build is running. Let it finish first.' >&2
+  exit 1
+fi
+logs="$HOME/.local/state/family-help/update-logs"
+umask 077
+mkdir -p "$logs"
+log=$(mktemp "$logs/update-XXXXXXXX.log")
+printf 'System update transcript: %s\n' "$log"
+# Avoid the updater's shared /tmp transcript; keep its actual update logic intact.
+/usr/bin/script -qefc '/usr/bin/env OMARCHY_UPDATE_LOGGED=1 /usr/bin/omarchy update' "$log"
+echo 'System updater finished. Applying reviewed child migrations next.'
+sudo /usr/local/sbin/family-migrate-child apply
+echo 'Family update complete. Arrange any required reboot after saving work.'

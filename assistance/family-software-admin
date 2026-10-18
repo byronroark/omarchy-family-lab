@@ -1,0 +1,11 @@
+#!/usr/bin/python3
+"""A private parent tmux session keeps approved maintenance alive on disconnect."""
+import json,os,pathlib,pwd,re,subprocess,sys
+cfg=json.loads(pathlib.Path('/etc/family-help/teaching.json').read_text())
+if pwd.getpwuid(os.getuid()).pw_name!=cfg['admin'] or os.geteuid()==0:sys.exit('Use the normal parent administrator account')
+if len(sys.argv)!=3 or sys.argv[1] not in ('approve','deny') or not re.fullmatch('[a-f0-9]{32}',sys.argv[2]):sys.exit('Invalid action')
+choice,identifier=sys.argv[1:]
+command='/usr/bin/sudo /usr/local/libexec/family-software-execute '+choice+' '+identifier+'; status=$?; if [ "$status" = 78 ]; then printf "\\nStarting the existing private-authentication teaching workflow for manual help.\\n"; /usr/bin/env -u TMUX /usr/bin/sudo /usr/local/libexec/family-admin-demo start; fi; printf "\\nRequest session ended. Press Enter to close.\\n"; read -r reply'
+# Socket in parent's private runtime directory, unrelated to the child's shared server.
+os.environ['TERM']='xterm-256color'
+os.execv('/usr/bin/tmux',['tmux','-L','family-software','-f','/dev/null','new-session','-A','-s','request-'+identifier,command])
