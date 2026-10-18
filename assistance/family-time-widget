@@ -1,27 +1,56 @@
 #!/usr/bin/python3
 """Parent screen-time cards; all authority stays on the child policy service."""
-import copy,threading
+import copy,threading,pathlib,re,tomllib
 import gi
-gi.require_version('Gtk','4.0')
-from gi.repository import Gtk,GLib
+gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
+from gi.repository import Gtk,Gdk,GLib
 from family_identity import helper_config
 from family_policy_client import request,report
 DAYS=('mon','tue','wed','thu','fri','sat','sun')
+def theme_css(home=None):
+    colors={'background':'#1a1b26','foreground':'#c0caf5','accent':'#7aa2f7','selection':'#292e42','muted':'#565f89'}
+    try:
+        data=tomllib.loads(((pathlib.Path.home() if home is None else pathlib.Path(home))/'.local/state/omarchy/current/theme/colors.toml').read_text())
+        colors.update({key:value for key,value in data.items() if key in colors and isinstance(value,str) and re.fullmatch(r'#[0-9a-fA-F]{6}',value)})
+    except (OSError,ValueError):pass
+    bg,fg,accent,selection,muted=(colors[key] for key in ('background','foreground','accent','selection','muted'))
+    return f"""
+    .family-time {{ background: {bg}; color: {fg}; font-family: monospace; font-size: 12px; }}
+    .family-time .heading {{ color: {accent}; font-size: 19px; font-weight: bold; }}
+    .family-time .feedback {{ color: {accent}; }}
+    .family-time entry, .family-time spinbutton, .family-time dropdown, .family-time button {{ background: {bg}; color: {fg}; border: 1px solid {muted}; border-radius: 3px; min-height: 25px; }}
+    .family-time entry {{ padding: 2px 8px; }}
+    .family-time button {{ padding: 4px 10px; }}
+    .family-time button:hover {{ background: {selection}; border-color: {accent}; }}
+    .family-time .primary {{ border-color: {accent}; color: {accent}; font-weight: bold; }}
+    .family-time selection {{ background: {selection}; color: {fg}; }}
+    """.encode()
+
 class App(Gtk.Application):
     def __init__(self):
         super().__init__(application_id='org.familylab.ParentTime');self.connect('activate',self.activate);self.config=helper_config();self.busy=False
     def label(self,text):
         node=Gtk.Label(label=text,xalign=0,wrap=True);self.box.append(node);return node
-    def button(self,text,callback):
-        button=Gtk.Button(label=text);button.connect('clicked',lambda *_:callback());self.box.append(button);return button
+    def button(self,text,callback,parent=None):
+        button=Gtk.Button(label=text);button.connect('clicked',lambda *_:callback());(self.box if parent is None else parent).append(button);return button
+    def update_theme(self):
+        css=theme_css()
+        if css!=getattr(self,'last_css',None):self.css.load_from_data(css);self.last_css=css
+        return True
     def activate(self,*_):
-        self.win=Gtk.ApplicationWindow(application=self,title='Family screen time',default_width=650,default_height=720)
-        self.box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10,margin_top=20,margin_bottom=20,margin_start=20,margin_end=20)
+        if self.get_active_window():self.get_active_window().present();return
+        self.css=Gtk.CssProvider();self.update_theme()
+        Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),self.css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        GLib.timeout_add_seconds(3,self.update_theme)
+        self.win=Gtk.ApplicationWindow(application=self,title='Family breaks and bedtime',default_width=640,default_height=800)
+        self.win.set_decorated(False);self.win.add_css_class('family-time')
+        self.box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=7,margin_top=18,margin_bottom=18,margin_start=20,margin_end=20)
         scroll=Gtk.ScrolledWindow();scroll.set_child(self.box);self.win.set_child(scroll)
         self.feedback=self.label('Connecting to your child’s policy service…');self.win.present();self.refresh()
-    def run_task(self,work,done):
+    def run_task(self,work,done,quiet=False):
         if self.busy:return
-        self.busy=True;self.feedback.set_text('Working…')
+        self.busy=True
+        if not quiet:self.feedback.set_text('Working…')
         def worker():
             try:value,error=work(),None
             except Exception as exc:value,error=None,str(exc)[:500]
@@ -38,15 +67,17 @@ class App(Gtk.Application):
         child=self.box.get_first_child()
         while child:
             nxt=child.get_next_sibling();self.box.remove(child);child=nxt
+        self.label('$ family-time').add_css_class('heading')
         self.feedback=self.label('Connected' if data.get('healthy') else 'Service is starting or unhealthy; do not rely on enforcement yet.')
-        self.label(subject['name']+' — revision '+str(data['revision']))
+        self.feedback.add_css_class('feedback')
+        self.label(subject['name']+' · revision '+str(data['revision']))
         state=data['status'].get(peer,{})
         self.label('Mode: '+subject['mode']+' | timezone: '+data['policy']['timezone'])
         self.label(f"Used today: {state.get('used_seconds',0)//60} min | Until next break: {state.get('remaining_seconds',0)//60} min")
         if state.get('reason'):self.label('Current restriction: '+state['reason'])
         if state.get('next_allowed'):self.label('Next access: '+str(state['next_allowed']))
-        self.label('A break schedule limits consecutive use, not total daily use. Bedtime is separate. This build counts logged-in time while awake, including idle time but excluding protected Dino breaks.')
-        self.label('Protected Dino enforcement is available.' if data.get('capabilities',{}).get('protected_break_guard') else 'Monitoring is available. Protected Dino enforcement remains disabled until its guard passes live acceptance.')
+        self.label('BREAKS  /  Work stays open · Bedtime is separate')
+        if not data.get('capabilities',{}).get('protected_break_guard'):self.label('Enforcement awaits live Dino acceptance.')
         self.label('Computer use before a break (minutes)')
         self.use=Gtk.SpinButton.new_with_range(1,240,5);self.use.set_value(subject.get('breaks',{}).get('use_minutes',60));self.box.append(self.use)
         self.label('Break duration (minutes)')
@@ -60,16 +91,19 @@ class App(Gtk.Application):
         self.timezone=Gtk.Entry(text=data['policy']['timezone']);self.box.append(self.timezone)
         self.modes=['off','monitor']+(['enforce'] if data.get('capabilities',{}).get('protected_break_guard') else [])
         self.mode=Gtk.DropDown.new_from_strings(self.modes);self.mode.set_selected(self.modes.index(subject['mode']) if subject['mode'] in self.modes else 1);self.box.append(self.mode)
-        self.button('Apply break schedule and allowed hours',self.apply)
+        self.button('Apply break schedule and allowed hours',self.apply).add_css_class('primary')
         current=state.get('break')
         if current and current['episode']:
             for title,change,minutes in [('Skip this break','skip',0),('Shorten this break by 5 minutes','shorten',5),('Extend this break by 5 minutes','extend',5)]:
                 self.button(title,lambda change=change,minutes=minutes:self.operation({'op':'break-adjust','peer':peer,'episode':current['episode'],'revision':current['revision'],'change':change,'minutes':minutes}))
+        bedtime=Gtk.Box(spacing=8,homogeneous=True);self.box.append(bedtime)
         for title,op in [('Skip bedtime today',{'op':'bedtime-today','enabled':True}),('Restore bedtime today',{'op':'bedtime-today','enabled':False})]:
-            self.button(title,lambda op=op:self.operation(dict(op,peer=peer)))
-        self.button('Save private time report',lambda:self.run_task(lambda:report(request({'op':'summary'}),peer),lambda path:self.feedback.set_text('Saved private report: '+str(path))))
-        self.button('Refresh',self.refresh)
-        self.run_task(lambda:request({'op':'break-pending'}),self.pending)
+            self.button(title,lambda op=op:self.operation(dict(op,peer=peer)),bedtime)
+        tools=Gtk.Box(spacing=8,homogeneous=True);self.box.append(tools)
+        self.button('Save private time report',lambda:self.run_task(lambda:report(request({'op':'summary'}),peer),lambda path:self.feedback.set_text('Saved private report: '+str(path))),tools)
+        self.button('Refresh',self.refresh,tools)
+        self.button('Close',self.win.close,tools)
+        self.run_task(lambda:request({'op':'break-pending'}),self.pending,quiet=True)
     def pending(self,result):
         for item in result['requests']:
             self.label('Break request: '+item['change']+(' '+str(item['minutes'])+' minutes' if item['minutes'] else '')+' — '+item['peer'])

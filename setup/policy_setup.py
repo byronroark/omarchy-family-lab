@@ -30,6 +30,16 @@ def enroll_helper(api,profile,args):
             tx.write('.local/bin/'+name,(api['ROOT']/'assistance'/name).read_bytes(),0o644 if name.endswith('.py') else 0o755)
         tx.write(str(ssh.relative_to(home)),(text.rstrip()+'\n'+start+'\n'.join(lines)+'\n'+end).encode(),0o600)
         tx.write('.config/family-help/helper.json',api['encoded'](config),0o600)
+        main=home/'.config/hypr/hyprland.lua'
+        if main.is_file():
+            text=main.read_text();start='-- BEGIN family-time popup\n';end='-- END family-time popup\n'
+            if text.count(start)!=text.count(end) or text.count(start)>1:raise ValueError('Ambiguous time-popup window-rule block')
+            block=start+'dofile(os.getenv("HOME") .. "/.config/hypr/family-time.lua")\n'+end
+            if start in text:
+                before,rest=text.split(start,1);_,after=rest.split(end,1);text=before+block+after
+            else:text=text.rstrip()+'\n\n'+block
+            tx.write('.config/hypr/family-time.lua',(api['ROOT']/'desktop/family-time.lua').read_bytes())
+            tx.write('.config/hypr/hyprland.lua',text.encode())
         tx.write('.local/share/applications/org.familylab.Time.desktop',('[Desktop Entry]\nType=Application\nName=Family breaks and bedtime\nExec="'+str(home/'.local/bin/family-time-widget')+'"\nIcon=preferences-system-time\nTerminal=false\nCategories=Settings;\n').encode(),0o644)
         tx.commit()
     except BaseException:tx.rollback();raise

@@ -1,4 +1,5 @@
 """Both parent capabilities get scoped break cards, never automatic approvals."""
+import tempfile,tomllib
 import ast,datetime as dt,pathlib,re,sys,types,unittest
 from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'assistance'))
@@ -7,6 +8,14 @@ class WidgetTests(unittest.TestCase):
     def methods(self):
         tree=ast.parse((ROOT/'assistance/family-help-widget').read_text())
         return [node for cls in tree.body if isinstance(cls,ast.ClassDef) for node in cls.body if isinstance(node,ast.FunctionDef) and node.name in ('build_parent','build_break','decide_break')]
+    def test_theme_colors_follow_omarchy_and_reject_css_injection(self):
+        tree=ast.parse((ROOT/'assistance/family-time-widget').read_text());method=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='theme_css')
+        ns={'pathlib':pathlib,'re':re,'tomllib':tomllib};exec(compile(ast.Module(body=[method],type_ignores=[]),'<popup theme>','exec'),ns)
+        with tempfile.TemporaryDirectory() as directory:
+            theme=pathlib.Path(directory)/'.local/state/omarchy/current/theme/colors.toml';theme.parent.mkdir(parents=True)
+            theme.write_text('background="#ffffff"\nforeground="#111111"\naccent="#123456"\n')
+            css=ns['theme_css'](directory);self.assertIn(b'#ffffff',css);self.assertIn(b'#123456',css)
+            theme.write_text('accent="evil; background: red"\n');self.assertNotIn(b'evil',ns['theme_css'](directory))
     def test_schedule_save_reads_fresh_state_and_confirms(self):
         tree=ast.parse((ROOT/'assistance/family-time-widget').read_text())
         method=next(n for cls in tree.body if isinstance(cls,ast.ClassDef) for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='operation')
