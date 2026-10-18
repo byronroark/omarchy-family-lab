@@ -55,7 +55,11 @@ These observations validate the individual deployed paths, not a fresh run of th
 - The new software **update request** broker route, every default agent, controller changes and each manual-review branch have not all been tested end to end. Parent-managed updates and Lutris/package approve/deny have been tested separately.
 - The menu catalog targets inspected 4.0.5 helper sources. It is not automatic compatibility with all future Omarchy releases. Hash mismatch downgrades to manual review; reviewed migrations also require maintenance.
 - Agent downloads and application installation remain deliberate parent choices. Fixed approved package transactions may execute distribution package hooks as root. The child configuration phase has user-level capabilities, not an application sandbox.
-- Mom’s GUI/basic management, simultaneous multiple-learner queues, broader polkit/container/device auditing, unattended approvals, and arbitrary terminal-sudo interception are not implemented. Terminal admin tasks use the private parent workflow.
+- Second-helper enrollment/GUI management and simultaneous multiple-learner queues, broader polkit/container/device auditing, unattended approvals, and arbitrary terminal-sudo interception are not implemented. Terminal admin tasks use the private parent workflow.
 - Experimental reporting, policy/PAM, time enforcement and Dino modules are not enabled by this installer. Their merged code still requires its own deployment acceptance.
 
 See [ENROLLMENT.md](ENROLLMENT.md) for the reproducible setup and the live checklist; see [SECURITY.md](../SECURITY.md) before relying on the boundaries.
+
+## Configurable primary helper follow-up
+
+Enrollment now asks for Dad, Mom, or another parent/guardian and a child-facing display name. Mom can be the sole technical helper without a Dad account or device. Widget text, question placeholder, consent/status messages, menu descriptions, application name and tray tooltip follow this setting. Role-specific and neutral command aliases map to the single selected helper; administrator authentication remains separate. Legacy Dad configurations remain readable. These changes have automated Mom/guardian configuration, UI and compatibility coverage; a live Mom enrollment has not yet been performed.

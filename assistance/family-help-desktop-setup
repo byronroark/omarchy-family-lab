@@ -46,7 +46,7 @@ def install(home,assets=ASSETS,activate=True):
             else:target.write_bytes(previous)
         if activate:subprocess.run(['/usr/bin/hyprctl','reload'],capture_output=True)
         raise
-    print('Ask Dad bar icon installed in the right section; learner popup opens top-right. Files changed:',len(changed))
+    print('Family Help bar icon installed in the right section; learner popup opens top-right. Files changed:',len(changed))
 if __name__=='__main__':
     try:
         cfg=json.loads(pathlib.Path('/etc/family-help/child.json').read_text())

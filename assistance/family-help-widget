@@ -5,8 +5,11 @@ import gi
 gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
 from gi.repository import Gtk,Gdk,GLib
 from family_help_image import bounded_command,bounded_file,normalize_png,prune
+from family_identity import helper_config,identity
 os.umask(0o077)
-DAD=len(sys.argv)>1 and sys.argv[1]=='dad'
+PARENT_PANEL=len(sys.argv)>1 and sys.argv[1] in ('dad','helper')
+IDENTITY_CONFIG=helper_config() if PARENT_PANEL else json.loads(pathlib.Path('/etc/family-help/child.json').read_text())
+HELPER,HELPER_SLUG=identity(IDENTITY_CONFIG)
 CSS=b'''
 .family-help { background: #101820; color: #d9e5ee; font-family: monospace; }
 .family-help .heading { color: #74e0c3; font-size: 21px; font-weight: bold; }
@@ -28,20 +31,20 @@ def read(path):
 def helper(mode):return ['/usr/local/libexec/family-help-child',mode]
 class HelpApp(Gtk.Application):
     def __init__(self):
-        super().__init__(application_id='org.familylab.HelpDad' if DAD else 'org.familylab.Help',flags=0)
+        super().__init__(application_id='org.familylab.HelpDad' if PARENT_PANEL else 'org.familylab.Help',flags=0)
         self.image=None;self.draft=None;self.busy=False;self.pasting=False
     def do_activate(self):
         if self.get_active_window():self.get_active_window().present();return
         css=Gtk.CssProvider();css.load_from_data(CSS)
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        self.win=Gtk.ApplicationWindow(application=self,title='Family Help' if DAD else 'Ask Dad')
+        self.win=Gtk.ApplicationWindow(application=self,title='Family Help' if PARENT_PANEL else 'Ask '+HELPER)
         self.win.set_default_size(650,580);self.win.set_resizable(False);self.win.add_css_class('family-help')
         self.win.connect('close-request',self.cleanup)
         box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=13)
         for side in ('top','bottom','start','end'):getattr(box,'set_margin_'+side)(22)
         self.win.set_child(box);self.box=box
-        self.label('$ family-help' if DAD else '$ ask-dad','heading')
-        if DAD:self.build_dad()
+        self.label('$ family-help' if PARENT_PANEL else '$ ask-'+HELPER_SLUG,'heading')
+        if PARENT_PANEL:self.build_parent()
         else:self.build_child()
         self.win.present()
     def label(self,text,style='',parent=None):
@@ -71,7 +74,7 @@ class HelpApp(Gtk.Application):
             if self.choices:item.set_group(self.choices[0][1])
             else:item.set_active(True)
             self.choices.append((topic,item));row.append(item)
-        self.entry=Gtk.Entry();self.entry.set_max_length(300);self.entry.set_placeholder_text("What would you like Dad's help with?");self.box.append(self.entry)
+        self.entry=Gtk.Entry();self.entry.set_max_length(300);self.entry.set_placeholder_text(f"What would you like {HELPER}'s help with?");self.box.append(self.entry)
         self.label('> Screenshot (optional)','prompt')
         self.frame=Gtk.Frame();self.frame.set_size_request(-1,155)
         self.picture=Gtk.Picture();self.picture.set_can_shrink(True);self.picture.set_size_request(580,145)
@@ -79,14 +82,14 @@ class HelpApp(Gtk.Application):
         self.frame.set_child(self.placeholder);self.box.append(self.frame)
         row=self.row();self.button('Capture region',self.capture,row);self.button('Paste screenshot',self.paste,row);self.button('Remove',self.clear_image,row)
         self.image_label=Gtk.Label(label='Nothing attached',xalign=0);self.image_label.add_css_class('muted');row.append(self.image_label)
-        self.feedback=self.label('Only the message and screenshot you send go to Dad.','status')
-        row=self.row();self.send_button=self.button('Ask Dad  [Ctrl+Enter]',self.send,row,'primary')
+        self.feedback=self.label(f'Only the message and screenshot you send go to {HELPER}.','status')
+        row=self.row();self.send_button=self.button(f'Ask {HELPER}  [Ctrl+Enter]',self.send,row,'primary')
         self.button('Close',self.win.close,row)
         self.label('> Learning controls','prompt');row=self.row()
         self.button('Start learning',lambda:self.action('learn',terminal=True),row)
-        self.allow=self.button('Let Dad type',lambda:self.action('allow'),row)
-        self.stop=self.button('Stop Dad typing',lambda:self.action('revoke'),row,'danger')
-        self.watch=self.button('Watch Dad',lambda:self.action('demo-view',terminal=True),row)
+        self.allow=self.button(f'Let {HELPER} type',lambda:self.action('allow'),row)
+        self.stop=self.button(f'Stop {HELPER} typing',lambda:self.action('revoke'),row,'danger')
+        self.watch=self.button(f'Watch {HELPER}',lambda:self.action('demo-view',terminal=True),row)
         self.live=self.label('','muted');self.refresh();GLib.timeout_add(1000,self.refresh)
         keys=Gtk.EventControllerKey();keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE);keys.connect('key-pressed',self.key);self.win.add_controller(keys)
     def key(self,_controller,keyval,_keycode,modifiers):
@@ -103,7 +106,7 @@ class HelpApp(Gtk.Application):
         allowed=bool(grant and grant.get('id')==request.get('id') and grant.get('expires',0)>now)
         self.allow.set_sensitive(waiting and not allowed);self.stop.set_sensitive(allowed)
         self.watch.set_sensitive(bool(demo and demo.get('expires',0)>now))
-        self.live.set_text('Dad can type. You can stop him here.' if allowed else 'Dad is asking to type. Choose Let Dad type if you want help.' if waiting else 'Dad can only watch until you allow typing.')
+        self.live.set_text(f'{HELPER} can type. You can stop typing access here.' if allowed else f'{HELPER} is asking to type. Choose Let {HELPER} type if you want help.' if waiting else f'{HELPER} can only watch until you allow typing.')
         return True
     def paste(self):
         if self.busy or self.pasting:return
@@ -117,11 +120,11 @@ class HelpApp(Gtk.Application):
             self.draft=self.state/'drafts'/(uuid.uuid4().hex+'.png');self.draft.write_bytes(self.image)
             self.picture.set_filename(str(self.draft));self.frame.set_child(self.picture)
             self.image_label.set_text(f"{meta['width']} × {meta['height']} • {meta['bytes']//1024} KB")
-            return self.status('Screenshot ready. It is sent only when you choose Ask Dad.')
+            return self.status(f'Screenshot ready. It is sent only when you choose Ask {HELPER}.')
         self.background(work,done)
     def capture(self):
         if self.busy or self.pasting:return
-        self.pasting=True;self.status('Select the region you want Dad to see.')
+        self.pasting=True;self.status(f'Select the region you want {HELPER} to see.')
         self.hold();self.win.set_visible(False)
         def work():
             try:before=hashlib.sha256(bounded_command(['/usr/bin/wl-paste','--no-newline','--type','image/png'],seconds=3)).digest()
@@ -141,7 +144,7 @@ class HelpApp(Gtk.Application):
             self.draft=self.state/'drafts'/(uuid.uuid4().hex+'.png');self.draft.write_bytes(self.image)
             self.picture.set_filename(str(self.draft));self.frame.set_child(self.picture)
             self.image_label.set_text(f"{meta['width']} × {meta['height']} • {meta['bytes']//1024} KB")
-            return self.status('Screenshot ready. It is sent only when you choose Ask Dad.')
+            return self.status(f'Screenshot ready. It is sent only when you choose Ask {HELPER}.')
         self.background(work,done)
     def clear_image(self):
         self.image=None
@@ -161,7 +164,7 @@ class HelpApp(Gtk.Application):
         def done(result,error):
             self.busy=False;self.send_button.set_sensitive(True)
             if not error:self.clear_image()
-            return self.status(error or 'Sent to Dad’s PC for collection. This is not a read receipt.')
+            return self.status(error or f'Sent to {HELPER}’s PC for collection. This is not a read receipt.')
         self.background(work,done)
     def action(self,mode,terminal=False):
         if terminal:
@@ -173,11 +176,11 @@ class HelpApp(Gtk.Application):
                 if r.returncode:raise ValueError(r.stderr.strip() or 'That action is not available right now.')
                 return r.stdout.strip()
             self.background(work,lambda result,error:self.status(error or result))
-    def build_dad(self):
+    def build_parent(self):
         identifier=sys.argv[2]
         if not re.fullmatch('[a-f0-9]{32}',identifier):raise ValueError('Invalid request')
         state=pathlib.Path.home()/'.local/state/family-help';data=read(state/'requests'/(identifier+'.json'))
-        label=json.loads((pathlib.Path.home()/'.config/family-help/dad.json').read_text())['label']
+        label=IDENTITY_CONFIG['label']
         self.label('Help requested: '+label,'prompt')
         self.label({'help':'Help me','watch':'Watch me','admin':'Admin task'}.get(data.get('topic'),'Help me'),'muted')
         self.label(data['message'])
@@ -198,7 +201,7 @@ class HelpApp(Gtk.Application):
             self.label('Approval expires after 15 minutes.\nApprove opens your private administrator terminal for authentication and transaction review.','muted')
             row=self.row()
             if manual:self.label('This action needs hands-on review. Accepting records the request; it does not run the installer.','muted')
-            self.button('Review with Dad' if manual else 'Review and approve',lambda:self.choose('approve'),row,'primary')
+            self.button(f'Review with {HELPER}' if manual else 'Review and approve',lambda:self.choose('approve'),row,'primary')
             self.button('Deny request',lambda:self.choose('deny'),row,'danger')
             self.button('Dismiss',lambda:self.choose('dismiss'),row)
             return

@@ -40,7 +40,7 @@ def main(payload):
             options='from="'+payload['source_ip']+'",restrict'+(',pty' if role!='poll' else '')
             lines.append(options+',command="/usr/local/libexec/family-help-child '+mode+'" '+payload['public_keys'][role])
         write(keys,raw.rstrip()+'\n'+start+'\n'.join(lines)+'\n'+end)
-        for name in ('ask-dad','allow-dad','stop-dad','watch-dad','learn-with-dad'):
+        for name in payload.get('aliases',('ask-dad','allow-dad','stop-dad','watch-dad','learn-with-dad')):
             local=home/'.local/bin'/name
             if local.exists() or local.is_symlink():
                 if not local.is_symlink() or os.readlink(local)!='/usr/local/libexec/family-help-child':raise ValueError('Existing user command would shadow installed '+name+'; review migration explicitly')
@@ -55,12 +55,13 @@ def main(payload):
         clean=re.sub(r'^\s*//[^\n]*(\n|$)','',raw,flags=re.M);clean=re.sub(r',(\s*[}\]])',r'\1',clean)
         data=json.loads(clean);items=data.get('items',data)
         if not isinstance(items,dict):raise ValueError('Existing menu is not an object')
+        helper_label=payload.get('helper_label','Dad')
         catalog=json.loads(pathlib.Path('/usr/local/libexec/family-menu-catalog.json').read_text())
         for identifier,item in catalog.items():
             if identifier.startswith('_'):continue
-            items[identifier]=dict(items.get(identifier,{}),description='Ask Dad for '+('hands-on review' if item['mode']=='manual' else 'approval'),action='omarchy-launch-floating-terminal-with-presentation /usr/local/libexec/family-menu-action '+identifier)
+            items[identifier]=dict(items.get(identifier,{}),description='Ask '+helper_label+' for '+('hands-on review' if item['mode']=='manual' else 'approval'),action='omarchy-launch-floating-terminal-with-presentation /usr/local/libexec/family-menu-action '+identifier)
         for identifier,action in [('install.package','install'),('update.omarchy','update')]:
-            items[identifier]=dict(items.get(identifier,{}),description='Ask Dad for approval',action='omarchy-launch-floating-terminal-with-presentation /usr/local/libexec/family-software-request '+action)
+            items[identifier]=dict(items.get(identifier,{}),description='Ask '+helper_label+' for approval',action='omarchy-launch-floating-terminal-with-presentation /usr/local/libexec/family-software-request '+action)
         write(path,json.dumps(data,indent=2,ensure_ascii=False)+'\n')
         print('Named software approval menu entries installed.');return
     if phase=='activate':

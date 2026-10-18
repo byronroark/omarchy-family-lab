@@ -6,7 +6,7 @@ Visible, consent-based terminal assistance for Omarchy PCs on a trusted local ne
 
 ## Reusable Ask Dad enrollment
 
-The [enrollment guide](docs/ENROLLMENT.md) covers the newer polling deployment: a native screenshot-capable Ask Dad widget, top-right question-mark bar icon, child-consented typing, read-only admin demonstrations and parent-approved Omarchy installs. Start with `./master-installation.sh configure`, then `./master-installation.sh plan` as the helper desktop user. Private profiles stay outside Git; Mom enrollment is deferred.
+The [enrollment guide](docs/ENROLLMENT.md) covers the newer polling deployment: a native screenshot-capable Ask Dad widget, top-right question-mark bar icon, child-consented typing, read-only admin demonstrations and parent-approved Omarchy installs. Start with `./master-installation.sh configure`, then `./master-installation.sh plan` as the helper desktop user. Choose Dad, Mom, or another parent/guardian as the sole helper; labels and command aliases follow that choice. Private profiles stay outside Git; adding a second helper is deferred.
 
 Read the [implementation and verification record](docs/ASSISTANCE_LESSONS.md): individual functions were verified on two PCs, while the new enrollment orchestrator has isolated tests and still needs a clean-machine rollout. It deliberately does not enable the experimental parental policy/PAM/Dino modules. This polling deployment and the older push prototype below are separate installation paths; do not layer their aliases/configuration blindly.
 

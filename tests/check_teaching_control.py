@@ -2,6 +2,7 @@ import fcntl,json,os,pathlib,pty,select,signal,subprocess,tempfile,termios,time
 source=(pathlib.Path(__file__).resolve().parents[1]/'assistance/family-help-child').read_text()
 with tempfile.TemporaryDirectory(prefix='family-help-test-',dir='/tmp') as temp:
     base=pathlib.Path(temp);sock=str(base/'tmux.sock');state=base/'state';conf=base/'child.json';script=base/'child'
+    (base/'family_identity.py').write_bytes((pathlib.Path(__file__).resolve().parents[1]/'assistance/family_identity.py').read_bytes())
     conf.write_text(json.dumps({'uid':os.getuid(),'state':str(state),'socket':sock,'session':'learning','viewer':'unused'}))
     script.write_text(source.replace('/etc/family-help/child.json',str(conf)));script.chmod(0o700)
     tmux=['/usr/bin/tmux','-S',sock,'-f','/dev/null']

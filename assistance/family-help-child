@@ -3,6 +3,8 @@
 import fcntl,hashlib,json,os,pathlib,pwd,re,signal,stat,subprocess,sys,time,uuid
 os.umask(0o077)
 cfg=json.loads(pathlib.Path('/etc/family-help/child.json').read_text())
+from family_identity import identity
+HELPER,HELPER_SLUG=identity(cfg)
 if os.getuid()!=cfg['uid']: sys.exit('Run as the enrolled learner')
 state=pathlib.Path(cfg['state']);state.mkdir(mode=0o700,parents=True,exist_ok=True)
 if state.is_symlink() or state.stat().st_uid!=os.getuid(): sys.exit('Unsafe state directory')
@@ -24,7 +26,7 @@ def identifier(value):
     if not isinstance(value,str) or not re.fullmatch('[a-f0-9]{32}',value): raise ValueError('Invalid request ID')
     return value
 cmd=pathlib.Path(sys.argv[0]).name
-modes={'ask-dad':'ask','allow-dad':'allow','stop-dad':'revoke','watch-dad':'demo-view','learn-with-dad':'learn'}
+modes={verb+'-'+role:mode for role in ('dad','mom','parent') for verb,mode in [('ask','ask'),('allow','allow'),('stop','revoke'),('watch','demo-view'),('learn-with','learn')]}
 mode=modes.get(cmd,sys.argv[1] if len(sys.argv)>1 else '')
 args=sys.argv[1:] if cmd in modes else sys.argv[2:]
 consent=state/'consent.json';control_request=state/'control-request.json'
@@ -71,31 +73,31 @@ elif mode=='send-widget':
             temp.write_bytes(encoded);temp.replace(path);prune(folder)
             request['screenshot']=meta
         save(state/'request.json',request)
-    print('Request saved for Dad.')
+    print(f'Request saved for {HELPER}.')
 elif mode=='ask':
     if not args:os.execv('/usr/local/libexec/family-help-widget',['family-help-widget'])
     text=' '.join(args)
-    if not 1<=len(text)<=300 or any(not c.isprintable() for c in text): sys.exit('Usage: ask-dad "one-line message, up to 300 characters"')
+    if not 1<=len(text)<=300 or any(not c.isprintable() for c in text): sys.exit(f'Usage: ask-{HELPER_SLUG} "one-line message, up to 300 characters"')
     tmux('has-session','-t','='+cfg['session'],stdout=subprocess.DEVNULL)
     with (state/'ask.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX);now=time.time();previous=read(state/'request.json')
         if type(previous.get('time')) in (int,float) and now-previous['time']<30: sys.exit('Please wait 30 seconds')
         save(state/'request.json',{'id':uuid.uuid4().hex,'time':now,'message':text})
-    print('Dad has been asked. He can watch, or ask you to allow typing. This is not software approval.')
+    print(f'{HELPER} has been asked and can watch or ask for typing permission. This is not software approval.')
 elif mode=='allow':
     request=read(control_request)
-    if not request or not 0<=time.time()-request.get('time',0)<=600: sys.exit('No current Dad typing request')
+    if not request or not 0<=time.time()-request.get('time',0)<=600: sys.exit(f'No current {HELPER} typing request')
     if args and args!=[request['id']]: sys.exit('Typing request replaced')
     identifier(request['id'])
     existing=read(consent)
     if existing.get('id')==request['id'] and type(existing.get('expires')) in (int,float) and existing['expires']>time.time():
-        print('Dad is already allowed; the original five-minute limit stays in place.')
+        print(f'{HELPER} is already allowed; the original five-minute limit stays in place.')
         sys.exit(0)
     save(consent,{'id':request['id'],'expires':time.time()+300})
-    print('Dad may type in your learning terminal for up to five minutes. Run stop-dad to revoke.')
+    print(f'{HELPER} may type in your learning terminal for up to five minutes. Run stop-{HELPER_SLUG} to revoke.')
 elif mode=='revoke':
     consent.unlink(missing_ok=True);control_request.unlink(missing_ok=True)
-    print('Dad typing permission revoked. Your learning session stays open.')
+    print(f'{HELPER} typing permission revoked. Your learning session stays open.')
 elif mode=='help':
     # Only the separate forced control key enters this mode. No parent privileges.
     with (state/'help.lock').open('a') as lock:
@@ -104,7 +106,7 @@ elif mode=='help':
         tmux('has-session','-t','='+cfg['session'])
         consent.unlink(missing_ok=True)
         request={'id':uuid.uuid4().hex,'time':time.time()};save(control_request,request)
-        print('Waiting up to ten minutes for your child to click Allow Dad typing, or run allow-dad.\r\nPermission lasts at most five minutes; stop-dad revokes it.',flush=True)
+        print(f'Waiting up to ten minutes for your child to click Allow {HELPER} typing, or run allow-{HELPER_SLUG}.\r\nPermission lasts at most five minutes; stop-{HELPER_SLUG} revokes it.',flush=True)
         child=None;old_status=None
         for sig in (signal.SIGHUP,signal.SIGTERM): signal.signal(sig,lambda *_:sys.exit(0))
         try:
@@ -121,7 +123,7 @@ elif mode=='help':
             def supervised():
                 if ctypes.CDLL(None).prctl(1,signal.SIGTERM)!=0 or os.getppid()!=supervisor: os._exit(1)
             old_status=tmux('show-options','-Av','-t',cfg['session'],'status-right',capture_output=True,text=True).stdout.rstrip('\n')
-            tmux('set-option','-t',cfg['session'],'status-right','DAD CAN TYPE | stop-dad to revoke | max 5 min')
+            tmux('set-option','-t',cfg['session'],'status-right',HELPER.upper().replace('#','##')+f' CAN TYPE | stop-{HELPER_SLUG} to revoke | max 5 min')
             child=subprocess.Popen(TMUX+['attach-session','-E','-t','='+cfg['session']],preexec_fn=supervised)
             while child.poll() is None:
                 current=read(consent)
@@ -153,7 +155,7 @@ elif mode=='desktop-watch':
             if request.get('id')!=seen_control and request and 0<=time.time()-request.get('time',0)<=600:
                 identifier(request['id'])
                 result=subprocess.run(['/usr/bin/omarchy-notification-send','--app-name','Family Help','-u','critical','-p','-r',str(notice_id),
-                    'Dad asks to type','Click to allow Dad to type in your learning terminal for five minutes. Run stop-dad to revoke.',
+                    f'{HELPER} asks to type',f'Click to allow {HELPER} to type in your learning terminal for five minutes. Run stop-{HELPER_SLUG} to revoke.',
                     '--exec','/usr/local/libexec/family-help-child','allow',request['id']],check=True,timeout=8,capture_output=True,text=True)
                 notice_id=int(result.stdout.strip())
                 seen_control=request['id']
@@ -164,7 +166,7 @@ elif mode=='desktop-watch':
             demo=read(pathlib.Path('/run/family-help-demo/active.json'))
             if demo.get('id')!=seen_demo and demo and time.time()<demo.get('expires',0):
                 identifier(demo['id'])
-                subprocess.Popen(['/usr/bin/omarchy-launch-terminal','/usr/bin/env','TERM=xterm-256color','/usr/local/bin/watch-dad'],
+                subprocess.Popen(['/usr/bin/omarchy-launch-terminal','/usr/bin/env','TERM=xterm-256color','/usr/local/bin/watch-'+HELPER_SLUG],
                                  stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
                 seen_demo=demo['id']
             time.sleep(1)

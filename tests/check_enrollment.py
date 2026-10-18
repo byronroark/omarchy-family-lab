@@ -17,6 +17,30 @@ class Enrollment(unittest.TestCase):
         p=profile();p['public_keys']['view']='command="shell" '+key(1);cases.append(p)
         for p in cases:
             with self.assertRaises((ValueError,KeyError)):m.validate(p)
+    def test_mom_can_be_the_only_helper(self):
+        p=profile();old=p.pop('dad');p.pop('mom');p['helper']=dict(old,kind='mom',label='Mom');p['other_parent']={'enabled':False}
+        m.validate(p)
+        with patch.object(m.pwd,'getpwnam',return_value=types.SimpleNamespace(pw_dir='/home/learner')):files=m.learner_files(p,12345,key(5),key(4))
+        cfg=json.loads(files['/etc/family-help/child.json'][0]);self.assertEqual(cfg['helper_label'],'Mom');self.assertEqual(cfg['helper_slug'],'mom')
+        self.assertIn('/usr/local/bin/ask-mom',files);self.assertIn('/usr/local/bin/ask-parent',files);self.assertNotIn('/usr/local/bin/ask-dad',files)
+        qml=files['/usr/local/share/family-help/ask-dad/AskDad.qml'][0];self.assertIn(b'"Ask Mom"',qml);self.assertNotIn(b'"Ask Dad"',qml)
+        self.assertIn(b'Name=Ask Mom',files['/usr/local/share/applications/org.familylab.Help.desktop'][0])
+        helper=m.helper_files(p,pathlib.Path('/home/helper'),pathlib.Path('/home/helper/admin'),pathlib.Path('/home/helper/roles'))
+        self.assertEqual(json.loads(helper['.config/family-help/helper.json'][0])['helper_label'],'Mom')
+        self.assertNotIn('.config/family-help/dad.json',helper)
+        self.assertEqual(json.loads(files['/etc/family-help/teaching.json'][0])['admin'],'parent')
+    def test_interactive_mom_profile_needs_no_dad(self):
+        answers=iter(['mom','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','',m.fingerprint(key(4))])
+        prompts=[]
+        def answer(prompt):prompts.append(prompt);return next(answers)
+        with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=m.prompt_profile()
+        self.assertEqual(p['helper']['kind'],'mom');self.assertEqual(p['helper']['label'],'Mom');self.assertNotIn('dad',p)
+        self.assertFalse(any('Dad desktop' in prompt or 'Dad device' in prompt for prompt in prompts))
+    def test_guardian_label_is_escaped_in_qml(self):
+        p=profile();p.pop('dad');p.pop('mom');p['helper']={'login':'helper','host':'192.0.2.20','kind':'parent','label':'Aunt "Lee"'}
+        m.validate(p)
+        with patch.object(m.pwd,'getpwnam',return_value=types.SimpleNamespace(pw_dir='/home/learner')):files=m.learner_files(p,12345,key(5),key(4))
+        self.assertIn(json.dumps('Ask Aunt "Lee"').encode(),files['/usr/local/share/family-help/ask-dad/AskDad.qml'][0])
     def test_file_idempotence_drift_and_rollback(self):
         with tempfile.TemporaryDirectory() as folder:
             root=pathlib.Path(folder);state=root/'private/state.json'

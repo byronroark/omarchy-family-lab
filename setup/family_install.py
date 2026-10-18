@@ -5,8 +5,17 @@ No account privilege changes, package upgrades, PAM policy or power operations.
 """
 import argparse,base64,datetime,grp,hashlib,ipaddress,json,os,pathlib,pwd,re,shutil,stat,subprocess,sys,tempfile,uuid
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
-ALIASES=['ask-dad','allow-dad','stop-dad','watch-dad','learn-with-dad']
+PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
+def selected_helper(profile):
+    if 'helper' in profile:
+        if 'dad' in profile or 'mom' in profile:raise ValueError('Use helper/other_parent or legacy dad/mom fields, not both')
+        return profile['helper']
+    return dict(profile['dad'],kind='dad',label='Dad')
+
+def command_aliases(profile):
+    roles={'parent',selected_helper(profile)['kind']}
+    return [verb+'-'+role for role in sorted(roles) for verb in ('ask','allow','stop','watch','learn-with')]
+
 BAD_GROUPS={'wheel','sudo','docker','disk','input','lxd','incus-admin','libvirt'}
 def plain(value):
     if not isinstance(value,str) or not re.fullmatch(r'[a-z_][a-z0-9_-]{0,31}',value):raise ValueError('Use an existing plain Linux login or role name')
@@ -19,20 +28,25 @@ def public_key(value):
     if len(raw)!=51 or raw[:19]!=b'\0\0\0\x0bssh-ed25519\0\0\0\x20':raise ValueError('Malformed Ed25519 key')
     return ' '.join(parts[:2])
 def validate(profile):
-    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar'}
+    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar','helper','other_parent'}
     if not isinstance(profile,dict) or set(profile)-allowed or type(profile.get('schema_version')) is not int or profile.get('schema_version')!=1:raise ValueError('Unsupported setup profile')
-    for role in ('learner','admin','dad'):
+    for role in ('learner','admin'):
         if not isinstance(profile.get(role),dict):raise ValueError('Missing role: '+role)
         plain(profile[role]['login'])
     if profile['learner']['login']==profile['admin']['login']:raise ValueError('Learner and administrator must be separate logins')
     learner=profile['learner'];plain(learner['id'])
     label=learner['label']
     if not isinstance(label,str) or not 1<=len(label)<=80 or not all(c.isprintable() for c in label):raise ValueError('Use a short printable learner label')
-    for role in ('learner','dad'):ipaddress.ip_address(profile[role]['host'])
+    helper=selected_helper(profile)
+    if not isinstance(helper,dict) or helper.get('kind') not in ('dad','mom','parent'):raise ValueError('Choose Dad, Mom, or another parent/guardian as helper')
+    plain(helper['login']);ipaddress.ip_address(helper['host'])
+    label=helper.get('label')
+    if not isinstance(label,str) or not 1<=len(label)<=40 or not all(c.isprintable() for c in label):raise ValueError('Use a short printable helper display label')
+    ipaddress.ip_address(profile['learner']['host'])
     if type(learner['port']) is not int or not 1<=learner['port']<=65535:raise ValueError('Invalid SSH port')
-    mom=profile.get('mom',{'enabled':False})
-    if not isinstance(mom,dict):raise ValueError('Invalid deferred Mom profile')
-    if mom.get('enabled') is not False:raise ValueError('Mom enrollment is deferred; record it disabled, do not silently create access')
+    mom=profile.get('other_parent',profile.get('mom',{'enabled':False}))
+    if not isinstance(mom,dict):raise ValueError('Invalid deferred additional-parent profile')
+    if mom.get('enabled') is not False:raise ValueError('A second helper is deferred; record it disabled, do not silently create access')
     if mom.get('login'):plain(mom['login'])
     if mom.get('host'):ipaddress.ip_address(mom['host'])
     if type(profile.get('bar',True)) is not bool:raise ValueError('bar must be a boolean')
@@ -49,10 +63,13 @@ def prompt_profile():
     def ask(label,default=''):
         answer=input(label+(' ['+default+']' if default else '')+': ').strip();return answer or default
     me=pwd.getpwuid(os.getuid()).pw_name
-    profile={'schema_version':1,'learner':{'id':ask('Stable learner ID','learner-a'),'login':ask('Existing child login'),'label':ask('Private display label','Learner'),'host':ask('Child device IP'),'port':int(ask('Child SSH port','22'))},
-       'admin':{'login':ask('Existing separate parent administrator login'),'identity_file':ask('Parent administrator private key (stays on this helper)','~/.ssh/family_admin_ed25519')},
-       'dad':{'login':ask('Dad desktop login',me),'host':ask('Dad device IP as seen by the child')},
-       'mom':{'enabled':False,'login':ask('Mom login (optional; deferred)'),'host':ask('Mom device IP (optional; deferred)')},'bar':True}
+    kind=ask('Who will receive help and software-approval requests? dad / mom / parent','dad').lower()
+    if kind not in ('dad','mom','parent'):raise ValueError('Choose dad, mom, or parent (another parent/guardian)')
+    label=ask('What should the child call this helper?',{'dad':'Dad','mom':'Mom','parent':'Parent'}[kind])
+    profile={'schema_version':1,'learner':{'id':ask('Stable learner ID','learner-a'),'login':ask('Existing child login'),'label':ask('Private child display label','Learner'),'host':ask('Child device IP'),'port':int(ask('Child SSH port','22'))},
+       'admin':{'login':ask('Existing separate parent administrator login'),'identity_file':ask('Administrator private key (stays on the helper PC)','~/.ssh/family_admin_ed25519')},
+       'helper':{'kind':kind,'label':label,'login':ask(label+' desktop login',me),'host':ask(label+' device IP as seen by the child')},
+       'other_parent':{'enabled':False,'login':ask('Additional parent login (optional; not enrolled)'),'host':ask('Additional parent device IP (optional; not enrolled)')},'bar':True}
     profile['host_fingerprint']=ask('Child Ed25519 SHA256 fingerprint verified at its physical console (required before helper apply)')
     return validate(profile)
 
@@ -113,11 +130,11 @@ def learner_files(profile,uid,viewer_public,host_public,catalog=None):
     for name in PROGRAMS:
         result['/usr/local/libexec/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
     if catalog is not None:result['/usr/local/libexec/family-menu-catalog.json']=(encoded(catalog),0o644,False)
-    for name in ALIASES:result['/usr/local/bin/'+name]=('/usr/local/libexec/family-help-child',0o777,True)
+    for name in command_aliases(profile):result['/usr/local/bin/'+name]=('/usr/local/libexec/family-help-child',0o777,True)
     result['/usr/local/sbin/family-migrate-child']=((ROOT/'assistance/family-migrate-child').read_bytes(),0o755,False)
     result['/usr/local/bin/family-update']=((ROOT/'assistance/family-update').read_bytes(),0o755,False)
-    result['/etc/family-help/child.json']=(encoded({'uid':uid,'state':home+'/.local/state/family-help','socket':home+'/.local/share/family-lab/tmux.sock','session':'learning','viewer':viewer,'port':profile['learner']['port']}),0o644,False)
-    result['/etc/family-help/teaching.json']=(encoded({'child':child,'admin':admin,'viewer':viewer,'dad_ip':profile['dad']['host']}),0o644,False)
+    result['/etc/family-help/child.json']=(encoded({'uid':uid,'state':home+'/.local/state/family-help','socket':home+'/.local/share/family-lab/tmux.sock','session':'learning','viewer':viewer,'port':profile['learner']['port'],'helper_label':selected_helper(profile)['label'],'helper_slug':selected_helper(profile)['kind']}),0o644,False)
+    result['/etc/family-help/teaching.json']=(encoded({'child':child,'admin':admin,'viewer':viewer,'helper_ip':selected_helper(profile)['host']}),0o644,False)
     result['/etc/family-help/migrations.json']=((ROOT/'assistance/reviewed-migrations.json').read_bytes(),0o644,False)
     loopback='127.0.0.1' if profile['learner']['port']==22 else '[127.0.0.1]:'+str(profile['learner']['port'])
     result['/etc/family-help/localhost_known_hosts']=((loopback+' '+public_key(host_public)+'\n').encode(),0o644,False)
@@ -148,9 +165,15 @@ RestartSec=5
 [Install]
 WantedBy=graphical-session.target
 ''',0o644,False)
-    result['/usr/local/share/applications/org.familylab.Help.desktop']=(b'[Desktop Entry]\nType=Application\nName=Ask Dad\nExec=/usr/local/libexec/family-help-widget\nIcon=help-browser\nTerminal=false\nCategories=Utility;\n',0o644,False)
+    label=selected_helper(profile)['label']
+    result['/usr/local/share/applications/org.familylab.Help.desktop']=(('[Desktop Entry]\nType=Application\nName=Ask '+label+'\nExec=/usr/local/libexec/family-help-widget\nIcon=help-browser\nTerminal=false\nCategories=Utility;\n').encode(),0o644,False)
     result['/usr/local/libexec/family-software-shims/omarchy-pkg-add']=(b'#!/bin/bash\n# No installation capability in the child configuration phase.\nexec /usr/bin/pacman -Q -- "$@"\n',0o755,False)
-    for name in ('manifest.json','AskDad.qml','window.lua'):result['/usr/local/share/family-help/ask-dad/'+name]=((ROOT/'desktop/ask-dad'/name).read_bytes(),0o644,False)
+    for name in ('manifest.json','AskDad.qml','window.lua'):
+        data=(ROOT/'desktop/ask-dad'/name).read_bytes()
+        if name=='AskDad.qml':data=data.decode().replace('"Ask Dad"',json.dumps('Ask '+label,ensure_ascii=True)).encode()
+        if name=='manifest.json':
+            manifest=json.loads(data);manifest['name']='Ask '+label;manifest['barWidget']['displayName']='Ask '+label;data=encoded(manifest)
+        result['/usr/local/share/family-help/ask-dad/'+name]=(data,0o644,False)
     return result
 
 def as_learner(account,payload):
@@ -211,8 +234,8 @@ def apply_learner(profile,args):
     try:
         for name,(data,mode,link) in learner_files(profile,child.pw_uid,viewer_public,host_public,catalog).items():tx.write(name,data,mode,link)
         run(['/usr/bin/sshd','-t']);verify_viewer_policy()
-        print(as_learner(child,{'phase':'learner-config','source_ip':profile['dad']['host'],'public_keys':profile['public_keys']}).stdout)
-        print(as_learner(child,{'phase':'menu'}).stdout)
+        print(as_learner(child,{'phase':'learner-config','source_ip':selected_helper(profile)['host'],'public_keys':profile['public_keys'],'helper_label':selected_helper(profile)['label'],'aliases':command_aliases(profile)}).stdout)
+        print(as_learner(child,{'phase':'menu','helper_label':selected_helper(profile)['label']}).stdout)
         if tx.changes:run(['/usr/bin/systemctl','reload','sshd'])
         if args.activate:print(as_learner(child,{'phase':'activate','bar':profile.get('bar',True)}).stdout)
         tx.commit()
@@ -239,7 +262,7 @@ def private_write(path,data):
 
 def check_admin_identity(value):
     path=private_path(value)
-    if not path.is_file() or path.stat().st_uid!=os.getuid() or path.stat().st_mode&0o077:raise ValueError('Admin identity must be a private file owned by Dad')
+    if not path.is_file() or path.stat().st_uid!=os.getuid() or path.stat().st_mode&0o077:raise ValueError('Admin identity must be a private file owned by the selected helper')
     lines=path.read_bytes().splitlines()
     if not lines or lines[0]!=b'-----BEGIN OPENSSH PRIVATE KEY-----':raise ValueError('Use a passphrase-protected OpenSSH admin key')
     raw=base64.b64decode(b''.join(lines[1:-1]),validate=True);magic=b'openssh-key-v1\0'
@@ -265,7 +288,7 @@ def pinned_host(profile):
 def role_key(path,role):
     path=private_path(str(path));make_parents(path.parent,0o700)
     if not path.exists():run(['/usr/bin/ssh-keygen','-q','-t','ed25519','-N','','-f',str(path),'-C','family-help-'+role])
-    if path.stat().st_uid!=os.getuid() or path.stat().st_mode&0o077:raise ValueError('Role key must be private and owned by Dad')
+    if path.stat().st_uid!=os.getuid() or path.stat().st_mode&0o077:raise ValueError('Role key must be private and owned by the selected helper')
     return public_key(run(['/usr/bin/ssh-keygen','-y','-P','','-f',str(path)],capture_output=True,text=True).stdout.strip())
 
 def ssh_value(value):
@@ -287,13 +310,13 @@ def helper_files(profile,home,identity,keys):
                 '    ControlMaster no','    ControlPath none','    PermitLocalCommand no','    BatchMode '+('no' if role=='admin' else 'yes')]
         if role!='admin':lines+=['    IdentityAgent none']
         lines+=['']
-    dad={'label':learner['label'],'ssh_config':str(ssh_config),'poll_alias':aliases['poll'],'view_alias':aliases['view'],'control_alias':aliases['control'],'admin_alias':aliases['admin']}
+    helper_settings={'helper_label':selected_helper(profile)['label'],'helper_slug':selected_helper(profile)['kind'],'label':learner['label'],'ssh_config':str(ssh_config),'poll_alias':aliases['poll'],'view_alias':aliases['view'],'control_alias':aliases['control'],'admin_alias':aliases['admin']}
     result={}
-    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_software.py','family_menu.py','family-menu-catalog.json'):
+    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_software.py','family_menu.py','family-menu-catalog.json'):
         result['.local/bin/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
     result['.config/family-help/ssh.conf']=('\n'.join(lines).encode(),0o600,False)
     result['.config/family-help/known_hosts']=((host+' '+profile['host_key']+'\n').encode(),0o600,False)
-    result['.config/family-help/dad.json']=(encoded(dad),0o600,False)
+    result['.config/family-help/helper.json']=(encoded(helper_settings),0o600,False)
     result['.config/systemd/user/family-help-watch.service']=(('''[Unit]
 Description=Family Help desktop requests
 PartOf=graphical-session.target
@@ -311,7 +334,7 @@ WantedBy=graphical-session.target
     return result
 
 def apply_helper(profile,args):
-    if os.geteuid()==0 or pwd.getpwuid(os.getuid()).pw_name!=profile['dad']['login']:raise ValueError('Run helper enrollment as the selected Dad desktop user, without sudo')
+    if os.geteuid()==0 or pwd.getpwuid(os.getuid()).pw_name!=selected_helper(profile)['login']:raise ValueError('Run helper enrollment as the selected helper desktop user, without sudo')
     home=pathlib.Path.home();private_path(str(home))
     if any(c in str(home) for c in '\n\r%"\\'):raise ValueError('Unsupported home path for systemd/SSH configuration')
     identity=check_admin_identity(profile['admin']['identity_file'])
@@ -347,7 +370,9 @@ def enrollment_bundle(profile,destination):
 
 def verify(profile,role):
     if role=='helper':
-        home=pathlib.Path.home();config=json.loads((home/'.config/family-help/dad.json').read_text())
+        home=pathlib.Path.home();config_path=home/'.config/family-help/helper.json'
+        if not config_path.exists():config_path=home/'.config/family-help/dad.json'
+        config=json.loads(config_path.read_text())
         for key in ('poll_alias','view_alias','control_alias','admin_alias'):
             result=run(['/usr/bin/ssh','-G','-F',config['ssh_config'],config[key]],capture_output=True,text=True).stdout
             settings=dict(line.split(' ',1) for line in result.splitlines() if ' ' in line)
@@ -382,17 +407,17 @@ def main():
     # Configuration is intentionally outside Git: IPs and family names are private.
     if pathlib.Path(args.profile)==ROOT or ROOT in pathlib.Path(args.profile).parents:raise ValueError('Keep the private setup profile outside the checkout')
     if args.command=='configure':
-        if args.role!='helper' or os.geteuid()==0:raise ValueError('Configure interactively as the Dad desktop user')
+        if args.role!='helper' or os.geteuid()==0:raise ValueError('Configure interactively as the selected helper desktop user')
         if pathlib.Path(args.profile).exists():raise ValueError('Existing profile preserved; edit it privately or choose another --profile path')
         private_write(pathlib.Path(args.profile),encoded(prompt_profile()));print('Private profile saved:',args.profile);return
     profile=validate(json.loads(pathlib.Path(args.profile).read_text()))
     if args.command=='plan':
         print('Read-only enrollment plan:')
-        print(json.dumps({key:profile[key] for key in ('learner','dad','mom') if key in profile},indent=2))
+        print(json.dumps({'learner':profile['learner'],'helper':selected_helper(profile),'other_parent':profile.get('other_parent',profile.get('mom',{'enabled':False}))},indent=2))
         print('Administrator:',profile['admin']['login'])
         print('Helper: encrypted administrator key stays local; pin host key; create independent forced poll/view/consent keys; install desktop watcher.')
         print('Learner: require standard child + existing administrator; add locked read-only system viewer; root-owned approval/migration helpers; child-owned menus, widget and optional top-right icon.')
-        print('Never: give child sudo, run arbitrary child commands as root, activate experimental parental policy, configure Mom, upgrade packages, reboot, change firewall or enable Dad SSH.')
+        print('Never: give child sudo, run arbitrary child commands as root, activate experimental parental policy, enroll a second helper, upgrade packages, reboot, change firewall or enable helper SSH.')
         return
     if args.command=='apply':
         if args.role=='helper':apply_helper(profile,args)

@@ -19,6 +19,7 @@ print('PASS: PNG metadata removed; invalid, oversized, truncated, trailing paylo
 with tempfile.TemporaryDirectory(prefix='family-help-widget-',dir='/tmp') as temp:
     base=pathlib.Path(temp);state=base/'state';drafts=state/'drafts';drafts.mkdir(parents=True)
     conf=base/'child.json';conf.write_text(json.dumps({'uid':os.getuid(),'state':str(state),'socket':str(base/'tmux.sock'),'session':'learning','viewer':'unused'}))
+    (base/'family_identity.py').write_bytes((pathlib.Path(__file__).resolve().parents[1]/'assistance/family_identity.py').read_bytes())
     script=base/'child';script.write_text((pathlib.Path(__file__).resolve().parents[1]/'assistance/family-help-child').read_text().replace('/etc/family-help/child.json',str(conf)))
     (base/'family_help_image.py').write_text((pathlib.Path(__file__).resolve().parents[1]/'assistance/family_help_image.py').read_text())
     draft='b'*32;(drafts/(draft+'.png')).write_bytes(original)

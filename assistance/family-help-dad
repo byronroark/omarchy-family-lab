@@ -2,7 +2,8 @@
 """Poll fixed enrolled endpoints and open read-only views; requests grant no privileges."""
 import fcntl, hashlib, html, json, os, pathlib, re, subprocess, sys, time
 os.umask(0o077)
-cfg = json.loads((pathlib.Path.home()/'.config/family-help/dad.json').read_text())
+from family_identity import helper_config
+cfg = helper_config()
 state = pathlib.Path.home()/'.local/state/family-help'
 state.mkdir(parents=True, exist_ok=True)
 def ssh(role):
@@ -86,7 +87,7 @@ elif len(sys.argv)>1 and sys.argv[1]=='panel':
         except BlockingIOError: sys.exit(0)
         try:screenshot(data)
         except (OSError,ValueError,subprocess.SubprocessError) as exc:print('Screenshot unavailable: '+str(exc),file=sys.stderr,flush=True)
-        result=subprocess.run(['/usr/bin/python3',str(pathlib.Path(__file__).resolve().with_name('family-help-widget')),'dad',data['id']],capture_output=True,text=True)
+        result=subprocess.run(['/usr/bin/python3',str(pathlib.Path(__file__).resolve().with_name('family-help-widget')),'helper',data['id']],capture_output=True,text=True)
         if result.returncode:raise ValueError('Help panel failed: '+result.stderr[-1000:])
         choice=result.stdout.strip()
         load_request(data['id'])

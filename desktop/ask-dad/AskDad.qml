@@ -20,6 +20,6 @@ BarWidget {
     tooltipText: "Ask Dad"
     Accessible.name: "Ask Dad"
     Accessible.role: Accessible.Button
-    onPressed: Quickshell.execDetached(["/usr/local/bin/ask-dad"])
+    onPressed: Quickshell.execDetached(["/usr/local/bin/ask-parent"])
   }
 }
