@@ -10,7 +10,7 @@ class WidgetTests(unittest.TestCase):
         return [node for cls in tree.body if isinstance(cls,ast.ClassDef) for node in cls.body if isinstance(node,ast.FunctionDef) and node.name in ('build_parent','build_break','decide_break')]
     def test_popup_matches_ask_dad_palette_and_keeps_fixed_footer(self):
         tree=ast.parse((ROOT/'assistance/family-time-widget').read_text());method=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='theme_css')
-        ns={};exec(compile(ast.Module(body=[method],type_ignores=[]),'<popup theme>','exec'),ns)
+        ns={'themed_css':lambda css,home=None:css};exec(compile(ast.Module(body=[method],type_ignores=[]),'<popup theme>','exec'),ns)
         css=ns['theme_css']()
         for color in (b'#101820',b'#74e0c3',b'#70d5ff',b'#183f3a'):self.assertIn(color,css)
         source=(ROOT/'assistance/family-time-widget').read_text()

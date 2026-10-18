@@ -5,7 +5,7 @@ No child sudo grants, package upgrades, PAM policy or power operations.
 """
 import argparse,base64,datetime,grp,hashlib,ipaddress,json,os,pathlib,pwd,re,runpy,shutil,stat,subprocess,sys,tempfile,uuid
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_approval.py','family_approval_client.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
+PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_theme.py','family_approval.py','family_approval_client.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
 def selected_helper(profile):
     if 'helper' in profile:
         if 'dad' in profile or 'mom' in profile:raise ValueError('Use helper/other_parent or legacy dad/mom fields, not both')
@@ -391,7 +391,7 @@ def helper_files(profile,home,identity,keys):
         helper_settings={key:value for key,value in helper_settings.items() if key not in ('poll_alias','view_alias','control_alias','admin_alias')}
     if delegated(profile):helper_settings.update(approval_alias=alias,quick_approval=selected_helper(profile).get('quick_approval',False))
     result={}
-    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
+    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_theme.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
         result['.local/bin/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
     result['.config/family-help/ssh.conf']=('\n'.join(lines).encode(),0o600,False)
     result['.config/family-help/known_hosts']=((host+' '+profile['host_key']+'\n').encode(),0o600,False)

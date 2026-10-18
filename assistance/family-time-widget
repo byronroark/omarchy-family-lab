@@ -6,10 +6,11 @@ gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
 from gi.repository import Gtk,Gdk,GLib
 from family_identity import helper_config
 from family_policy_client import request,report
+from family_theme import themed_css
 DAYS=('mon','tue','wed','thu','fri','sat','sun')
 def theme_css(home=None):
-    # Match the established Ask Dad cards rather than the desktop palette.
-    return b"""
+    # Share the Ask Dad layout and map its color roles to the active theme.
+    return themed_css(b"""
     .family-time { background: #101820; color: #d9e5ee; font-family: monospace; font-size: 12px; }
     .family-time .heading { color: #74e0c3; font-size: 21px; font-weight: bold; }
     .family-time .feedback { color: #70d5ff; }
@@ -20,7 +21,7 @@ def theme_css(home=None):
     .family-time .primary { background: #183f3a; color: #95f5d7; border-color: #58b99a; font-weight: bold; }
     .family-time .footer { background: #101820; border-top: 1px solid #345266; padding: 12px 16px; }
     .family-time selection { background: #2a4252; color: #edf6ff; }
-    """
+    """,home)
 
 class App(Gtk.Application):
     def __init__(self):
