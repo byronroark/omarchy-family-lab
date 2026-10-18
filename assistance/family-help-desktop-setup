@@ -1,0 +1,60 @@
+#!/usr/bin/python3
+"""Install the learner's bar shortcut and a narrowly matched popup position rule."""
+import json,os,pathlib,shutil,subprocess,sys
+ASSETS=pathlib.Path('/usr/local/share/family-help/ask-dad')
+IDENTIFIER='community.family-lab.ask-dad'
+START='-- BEGIN family-help popup\n';END='-- END family-help popup\n'
+def run(command):return subprocess.run(command,check=True,capture_output=True,text=True,timeout=20)
+def errors():
+    value=run(['/usr/bin/hyprctl','configerrors']).stdout.strip()
+    if value not in ('','[]','ok','no errors','No errors'):raise ValueError('Hyprland configuration errors: '+value)
+def install(home,assets=ASSETS,activate=True):
+    if os.geteuid()==0:raise ValueError('Desktop changes must run as the learner, never root')
+    plugin=home/'.config/omarchy/plugins'/IDENTIFIER
+    main=home/'.config/hypr/hyprland.lua';rule=main.with_name('family-help.lua')
+    if not main.is_file():raise ValueError('An existing Omarchy Lua desktop is required')
+    old=main.read_text()
+    if old.count(START)!=old.count(END) or old.count(START)>1:raise ValueError('Ambiguous managed window-rule block; preserve existing config and stop')
+    block=START+'dofile(os.getenv("HOME") .. "/.config/hypr/family-help.lua")\n'+END
+    if START in old:
+        before,rest=old.split(START,1);_,after=rest.split(END,1);new=before+block+after
+    else:new=old.rstrip()+'\n\n'+block
+    if activate:errors()
+    changed={}
+    def write(target,data):
+        if target.is_symlink():raise ValueError('Refusing to replace symlink-managed desktop file: '+str(target))
+        previous=target.read_bytes() if target.exists() else None
+        if previous==data:return
+        target.parent.mkdir(parents=True,exist_ok=True)
+        if previous is not None:
+            backup=target.with_name(target.name+'.before-family-help')
+            if not backup.exists():backup.write_bytes(previous)
+        changed[target]=previous
+        temp=target.with_name(target.name+'.family-help.tmp');temp.write_bytes(data);temp.replace(target)
+    try:
+        write(rule,(assets/'window.lua').read_bytes());write(main,new.encode())
+        for name in ('manifest.json','AskDad.qml'):write(plugin/name,(assets/name).read_bytes())
+        if activate:
+            run(['/usr/bin/hyprctl','reload']);errors()
+            run(['/usr/bin/omarchy','plugin','validate',str(plugin)])
+            run(['/usr/bin/omarchy-shell','shell','rescanPlugins'])
+            run(['/usr/bin/omarchy','plugin','enable',IDENTIFIER,'--section','right','--index','0'])
+            errors()
+    except BaseException:
+        for target,previous in reversed(list(changed.items())):
+            if previous is None:target.unlink(missing_ok=True)
+            else:target.write_bytes(previous)
+        if activate:subprocess.run(['/usr/bin/hyprctl','reload'],capture_output=True)
+        raise
+    print('Family Help bar icon installed in the right section; learner popup opens top-right. Files changed:',len(changed))
+if __name__=='__main__':
+    try:
+        cfg=json.loads(pathlib.Path('/etc/family-help/child.json').read_text())
+        if os.getuid()!=cfg['uid']:raise ValueError('Use the enrolled learner account')
+        os.environ['XDG_RUNTIME_DIR']='/run/user/'+str(os.getuid())
+        os.environ['DBUS_SESSION_BUS_ADDRESS']='unix:path='+os.environ['XDG_RUNTIME_DIR']+'/bus'
+        for line in run(['/usr/bin/systemctl','--user','show-environment']).stdout.splitlines():
+            key,sep,value=line.partition('=')
+            if sep and key in ('HYPRLAND_INSTANCE_SIGNATURE','WAYLAND_DISPLAY','DISPLAY','XDG_CURRENT_DESKTOP'):os.environ[key]=value
+        install(pathlib.Path.home(),activate='--no-activate' not in sys.argv)
+    except (OSError,ValueError,subprocess.SubprocessError) as exc:sys.exit(str(exc))

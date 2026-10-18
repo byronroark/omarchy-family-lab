@@ -1,0 +1,130 @@
+#!/usr/bin/python3
+"""Poll fixed enrolled endpoints and open read-only views; requests grant no privileges."""
+import fcntl, hashlib, html, json, os, pathlib, re, subprocess, sys, time
+os.umask(0o077)
+from family_identity import helper_config
+cfg = helper_config()
+state = pathlib.Path.home()/'.local/state/family-help'
+state.mkdir(parents=True, exist_ok=True)
+def ssh(role):
+    return ['/usr/bin/ssh','-F',cfg['ssh_config'],'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',
+            '-o','ConnectTimeout=4','-o','ConnectionAttempts=1',cfg[role]]
+def validate(data):
+    if isinstance(data,dict) and 'software' in data:
+        from family_software import validate_request
+        return validate_request(data)
+    if not isinstance(data,dict) or not {'id','time','message'}<=set(data)<= {'id','time','message','topic','screenshot'}: raise ValueError('Invalid fields')
+    if not isinstance(data['id'],str) or not re.fullmatch('[a-f0-9]{32}',data['id']): raise ValueError('Invalid ID')
+    if type(data['time']) not in (int,float) or not 0 <= time.time()-data['time'] <= 86400: raise ValueError('Expired request or clock mismatch')
+    text=data['message']
+    if not isinstance(text,str) or not 1<=len(text)<=300 or any(not c.isprintable() for c in text): raise ValueError('Invalid text')
+    if data.get('topic','help') not in ('help','watch','admin'):raise ValueError('Invalid request topic')
+    if 'screenshot' in data:
+        from family_help_image import MAX_IMAGE,MAX_SIDE,MAX_PIXELS
+        meta=data['screenshot']
+        if not isinstance(meta,dict) or set(meta)!={'sha256','bytes','width','height'}:raise ValueError('Invalid screenshot fields')
+        if not isinstance(meta['sha256'],str) or not re.fullmatch('[a-f0-9]{64}',meta['sha256']):raise ValueError('Invalid screenshot digest')
+        if any(type(meta[k]) is not int for k in ('bytes','width','height')):raise ValueError('Invalid screenshot dimensions')
+        if not 33<=meta['bytes']<=MAX_IMAGE or not 1<=meta['width']<=MAX_SIDE or not 1<=meta['height']<=MAX_SIDE or meta['width']*meta['height']>MAX_PIXELS:raise ValueError('Screenshot too large')
+    return data
+def screenshot(data):
+    if not data.get('screenshot'):return
+    from family_help_image import bounded_command,normalize_png,prune
+    folder=state/'screenshots';folder.mkdir(mode=0o700,exist_ok=True);path=folder/(data['id']+'.png')
+    if path.exists():return
+    image=bounded_command(ssh('poll_alias')+['screenshot',data['id']])
+    meta=data['screenshot']
+    if len(image)!=meta['bytes'] or hashlib.sha256(image).hexdigest()!=meta['sha256']:raise ValueError('Screenshot transfer did not match request')
+    clean,actual=normalize_png(image)
+    if (actual['width'],actual['height'])!=(meta['width'],meta['height']):raise ValueError('Screenshot dimensions do not match')
+    temp=folder/(data['id']+'.tmp');temp.write_bytes(clean);temp.replace(path);prune(folder)
+def poll():
+    # Bound output even if an enrolled learner replaces their own SSH endpoint.
+    with subprocess.Popen(ssh('poll_alias'),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL) as proc:
+        import select
+        result=b''; deadline=time.monotonic()+8
+        try:
+            while True:
+                remaining=deadline-time.monotonic()
+                if remaining<=0 or not select.select([proc.stdout],[],[],remaining)[0]: raise ValueError('Poll timeout')
+                chunk=os.read(proc.stdout.fileno(),2049-len(result))
+                if not chunk: break
+                result+=chunk
+                if len(result)>2048: raise ValueError('Oversize request')
+            if proc.wait(timeout=2): raise ValueError('Poll failed')
+        finally:
+            if proc.poll() is None: proc.kill()
+    return json.loads(result)
+def launch(role):
+    if role=='admin':
+        command=['/usr/bin/ssh','-F',cfg['ssh_config'],'-tt','-o','BatchMode=no',cfg['admin_alias'],
+                 'sudo','/usr/local/libexec/family-admin-demo','start']
+    else:
+        command=[*ssh(role)[:1],'-tt',*ssh(role)[1:]]
+    subprocess.Popen(['/usr/bin/omarchy-launch-terminal','/usr/bin/env','TERM=xterm-256color',*command],
+                     stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+def load_request(identifier):
+    if not re.fullmatch('[a-f0-9]{32}',identifier): raise ValueError('Invalid ID')
+    return validate(json.loads((state/'requests'/ (identifier+'.json')).read_text()))
+def software_terminal(data,choice):
+    subprocess.Popen(['/usr/bin/omarchy-launch-terminal','/usr/bin/env','TERM=xterm-256color',
+        '/usr/bin/python3',str(pathlib.Path(__file__).resolve()),'software',data['id'],choice],
+        stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+if len(sys.argv)>1 and sys.argv[1]=='software':
+    data=load_request(sys.argv[2]);choice=sys.argv[3]
+    if choice not in ('approve','deny') or 'software' not in data:sys.exit('Invalid approval')
+    folder=state/'approvals';folder.mkdir(mode=0o700,exist_ok=True)
+    path=folder/(data['id']+'.json');path.write_text(json.dumps(data))
+    admin=['/usr/bin/ssh','-F',cfg['ssh_config'],'-o','BatchMode=no','-o','StrictHostKeyChecking=yes',cfg['admin_alias']]
+    subprocess.run(admin+['mkdir -p -m 700 .local/state/family-help/approvals'],check=True)
+    subprocess.run(['/usr/bin/scp','-F',cfg['ssh_config'],'-o','BatchMode=no','-o','StrictHostKeyChecking=yes',str(path),
+        cfg['admin_alias']+':.local/state/family-help/approvals/'+data['id']+'.json'],check=True)
+    subprocess.run(admin[:1]+['-tt']+admin[1:]+['/usr/local/libexec/family-software-admin',choice,data['id']],check=True)
+elif len(sys.argv)>1 and sys.argv[1]=='panel':
+    data=load_request(sys.argv[2])
+    with (state/'panel.lock').open('a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: sys.exit(0)
+        try:screenshot(data)
+        except (OSError,ValueError,subprocess.SubprocessError) as exc:print('Screenshot unavailable: '+str(exc),file=sys.stderr,flush=True)
+        result=subprocess.run(['/usr/bin/python3',str(pathlib.Path(__file__).resolve().with_name('family-help-widget')),'helper',data['id']],capture_output=True,text=True)
+        if result.returncode:raise ValueError('Help panel failed: '+result.stderr[-1000:])
+        choice=result.stdout.strip()
+        load_request(data['id'])
+        if choice in ('approve','deny') and 'software' in data:software_terminal(data,choice)
+        elif choice=='admin': launch('admin')
+        elif choice=='watch': launch('view_alias')
+        elif choice=='help': launch('control_alias')
+        (state/'handled').write_text(data['id'])
+elif len(sys.argv)>1 and sys.argv[1]=='open':
+    # Backward compatibility for old native notification actions.
+    data=validate(json.loads((state/'pending.json').read_text()))
+    if len(sys.argv)!=3 or sys.argv[2]!=data['id']: sys.exit('Request replaced; ask again')
+    launch('view_alias')
+elif len(sys.argv)>1 and sys.argv[1]=='watch':
+    with (state/'watch.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        handled=state/'handled'; pending=state/'pending.json'; next_notice=0; panel=None
+        requests=state/'requests';requests.mkdir(mode=0o700,exist_ok=True)
+        last_error=None
+        print('Family Help watcher active',flush=True)
+        while True:
+            try:
+                data=poll()
+                if data:
+                    validate(data)
+                    if (panel is None or panel.poll() is not None) and (not handled.exists() or handled.read_text()!=data['id']) and time.monotonic()>=next_notice:
+                        temp=state/'pending.tmp'; temp.write_text(json.dumps(data)); temp.replace(pending)
+                        (requests/(data['id']+'.json')).write_text(json.dumps(data))
+                        panel=subprocess.Popen([sys.executable,str(pathlib.Path(__file__).resolve()),'panel',data['id']])
+                        next_notice=time.monotonic()+30
+                        print('Persistent help panel opened',flush=True)
+                last_error=None
+            except (ValueError,OSError,RecursionError,subprocess.SubprocessError) as exc:
+                error=str(exc)
+                if error!=last_error:
+                    print('Help check unavailable: '+error,flush=True)
+                    last_error=error
+            time.sleep(5)
+else:
+    sys.exit('Usage: family-help-dad watch | panel REQUEST_ID | open REQUEST_ID')

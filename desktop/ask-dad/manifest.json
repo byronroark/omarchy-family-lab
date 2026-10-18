@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "community.family-lab.ask-dad",
+  "name": "Ask Dad",
+  "version": "0.1.0",
+  "author": "Omarchy Family Lab contributors",
+  "description": "Open the local learner help popup from the bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {"barWidget": "AskDad.qml"},
+  "barWidget": {
+    "displayName": "Ask Dad",
+    "description": "Request help, share a screenshot, or manage learning consent",
+    "category": "Family",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

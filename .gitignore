@@ -34,3 +34,8 @@ gate.json
 policy.local.*
 *.jsonl
 reports/
+
+# Private enrollment inputs and exports (use paths outside the checkout)
+setup.local.json
+*.enrollment.json
+enrollment-bundle*/

@@ -10,7 +10,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux
+        run: sudo apt-get update && sudo apt-get install -y tmux python3-gi gir1.2-gdkpixbuf-2.0
       - name: Check Python syntax
         run: python3 -m py_compile scripts/family-lab
       - name: Check shell syntax
@@ -37,3 +37,9 @@ jobs:
         run: node tests/check_dino_model.cjs && python3 tests/check_next_allowed.py
       - name: Verify persistent Dino authority and learner socket
         run: python3 tests/check_dino_authority.py
+      - name: Verify family enrollment and managed desktop files (isolated)
+        run: python3 tests/check_enrollment.py && python3 tests/check_helper_identity.py && python3 tests/check_desktop_setup.py
+      - name: Verify assistance schemas, software approval and screenshot boundaries
+        run: python3 tests/check_software_approval.py && python3 tests/check_menu_approvals.py && /usr/bin/python3 tests/check_help_widget.py
+      - name: Verify teaching consent lifecycle with isolated tmux
+        run: python3 tests/check_teaching_control.py

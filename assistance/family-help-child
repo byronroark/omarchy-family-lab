@@ -1,0 +1,173 @@
+#!/usr/bin/python3
+"""Child help requests, explicit bounded consent and read-only demo launcher. Never runs sudo."""
+import fcntl,hashlib,json,os,pathlib,pwd,re,signal,stat,subprocess,sys,time,uuid
+os.umask(0o077)
+cfg=json.loads(pathlib.Path('/etc/family-help/child.json').read_text())
+from family_identity import identity
+HELPER,HELPER_SLUG=identity(cfg)
+if os.getuid()!=cfg['uid']: sys.exit('Run as the enrolled learner')
+state=pathlib.Path(cfg['state']);state.mkdir(mode=0o700,parents=True,exist_ok=True)
+if state.is_symlink() or state.stat().st_uid!=os.getuid(): sys.exit('Unsafe state directory')
+TMUX=['/usr/bin/tmux','-S',cfg['socket']]
+def tmux(*args,**kw): return subprocess.run(TMUX+list(args),check=True,**kw)
+def save(path,data):
+    temp=state/('write.'+uuid.uuid4().hex+'.tmp');temp.write_text(json.dumps(data));temp.replace(path)
+def read(path):
+    try:
+        fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode): return {}
+            data=file.read(2049)
+        if len(data)>2048: return {}
+        value=json.loads(data)
+        return value if isinstance(value,dict) else {}
+    except (OSError,ValueError,RecursionError): return {}
+def identifier(value):
+    if not isinstance(value,str) or not re.fullmatch('[a-f0-9]{32}',value): raise ValueError('Invalid request ID')
+    return value
+cmd=pathlib.Path(sys.argv[0]).name
+modes={verb+'-'+role:mode for role in ('dad','mom','parent') for verb,mode in [('ask','ask'),('allow','allow'),('stop','revoke'),('watch','demo-view'),('learn-with','learn')]}
+mode=modes.get(cmd,sys.argv[1] if len(sys.argv)>1 else '')
+args=sys.argv[1:] if cmd in modes else sys.argv[2:]
+consent=state/'consent.json';control_request=state/'control-request.json'
+if mode=='view':
+    os.execv(TMUX[0],TMUX+['attach-session','-r','-E','-t','='+cfg['session']])
+elif mode=='learn':
+    folder=pathlib.Path(cfg['socket']).parent
+    if folder.is_symlink():sys.exit('Unsafe learning socket directory')
+    folder.mkdir(mode=0o700,parents=True,exist_ok=True)
+    if folder.stat().st_uid!=os.getuid() or folder.stat().st_mode&0o022:sys.exit('Unsafe learning socket directory')
+    os.execv(TMUX[0],TMUX+['new-session','-A','-s',cfg['session']])
+elif mode=='poll':
+    # The only new SSH request is a fixed operation plus a validated opaque ID.
+    match=re.fullmatch(r'screenshot ([a-f0-9]{32})',os.environ.get('SSH_ORIGINAL_COMMAND',''))
+    if match:
+        from family_help_image import bounded_file,MAX_IMAGE
+        sys.stdout.buffer.write(bounded_file(state/'screenshots'/(match[1]+'.png'),MAX_IMAGE))
+    else: print(json.dumps(read(state/'request.json')))
+elif mode=='send-widget':
+    import select
+    deadline=time.monotonic()+5;raw=b''
+    while True:
+        left=deadline-time.monotonic()
+        if left<=0 or not select.select([0],[],[],left)[0]:sys.exit('Request timed out')
+        chunk=os.read(0,2049-len(raw))
+        if not chunk:break
+        raw+=chunk
+        if len(raw)>2048:sys.exit('Request too large')
+    payload=json.loads(raw)
+    if not isinstance(payload,dict) or not {'message','topic'}<=set(payload)<= {'message','topic','draft'}:sys.exit('Invalid request')
+    text=payload['message'];topic=payload['topic']
+    if not isinstance(text,str) or not 1<=len(text)<=300 or any(not c.isprintable() for c in text):sys.exit('Use a short single-line message')
+    if topic not in ('help','watch','admin'):sys.exit('Invalid request choice')
+    with (state/'ask.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX);now=time.time();previous=read(state/'request.json')
+        if type(previous.get('time')) in (int,float) and now-previous['time']<30:sys.exit('Please wait 30 seconds between requests')
+        request={'id':uuid.uuid4().hex,'time':now,'message':text,'topic':topic}
+        if 'draft' in payload:
+            from family_help_image import bounded_file,normalize_png,prune
+            draft=state/'drafts'/(identifier(payload['draft'])+'.png')
+            encoded,meta=normalize_png(bounded_file(draft))
+            folder=state/'screenshots';folder.mkdir(mode=0o700,exist_ok=True)
+            path=folder/(request['id']+'.png');temp=folder/(request['id']+'.tmp')
+            temp.write_bytes(encoded);temp.replace(path);prune(folder)
+            request['screenshot']=meta
+        save(state/'request.json',request)
+    print(f'Request saved for {HELPER}.')
+elif mode=='ask':
+    if not args:os.execv('/usr/local/libexec/family-help-widget',['family-help-widget'])
+    text=' '.join(args)
+    if not 1<=len(text)<=300 or any(not c.isprintable() for c in text): sys.exit(f'Usage: ask-{HELPER_SLUG} "one-line message, up to 300 characters"')
+    tmux('has-session','-t','='+cfg['session'],stdout=subprocess.DEVNULL)
+    with (state/'ask.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX);now=time.time();previous=read(state/'request.json')
+        if type(previous.get('time')) in (int,float) and now-previous['time']<30: sys.exit('Please wait 30 seconds')
+        save(state/'request.json',{'id':uuid.uuid4().hex,'time':now,'message':text})
+    print(f'{HELPER} has been asked and can watch or ask for typing permission. This is not software approval.')
+elif mode=='allow':
+    request=read(control_request)
+    if not request or not 0<=time.time()-request.get('time',0)<=600: sys.exit(f'No current {HELPER} typing request')
+    if args and args!=[request['id']]: sys.exit('Typing request replaced')
+    identifier(request['id'])
+    existing=read(consent)
+    if existing.get('id')==request['id'] and type(existing.get('expires')) in (int,float) and existing['expires']>time.time():
+        print(f'{HELPER} is already allowed; the original five-minute limit stays in place.')
+        sys.exit(0)
+    save(consent,{'id':request['id'],'expires':time.time()+300})
+    print(f'{HELPER} may type in your learning terminal for up to five minutes. Run stop-{HELPER_SLUG} to revoke.')
+elif mode=='revoke':
+    consent.unlink(missing_ok=True);control_request.unlink(missing_ok=True)
+    print(f'{HELPER} typing permission revoked. Your learning session stays open.')
+elif mode=='help':
+    # Only the separate forced control key enters this mode. No parent privileges.
+    with (state/'help.lock').open('a') as lock:
+        try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError: sys.exit('A help connection is already open')
+        tmux('has-session','-t','='+cfg['session'])
+        consent.unlink(missing_ok=True)
+        request={'id':uuid.uuid4().hex,'time':time.time()};save(control_request,request)
+        print(f'Waiting up to ten minutes for your child to click Allow {HELPER} typing, or run allow-{HELPER_SLUG}.\r\nPermission lasts at most five minutes; stop-{HELPER_SLUG} revokes it.',flush=True)
+        child=None;old_status=None
+        for sig in (signal.SIGHUP,signal.SIGTERM): signal.signal(sig,lambda *_:sys.exit(0))
+        try:
+            deadline=time.monotonic()+600
+            while time.monotonic()<deadline:
+                grant=read(consent)
+                if grant.get('id')==request['id'] and type(grant.get('expires')) in (int,float) and 0<grant['expires']-time.time()<=301: break
+                time.sleep(.2)
+            else: sys.exit('No permission received; no input access granted')
+            expiry=min(grant['expires'],time.time()+300)
+            # A supervisor disconnects this client on expiry, revoke or lost SSH session.
+            import ctypes
+            supervisor=os.getpid()
+            def supervised():
+                if ctypes.CDLL(None).prctl(1,signal.SIGTERM)!=0 or os.getppid()!=supervisor: os._exit(1)
+            old_status=tmux('show-options','-Av','-t',cfg['session'],'status-right',capture_output=True,text=True).stdout.rstrip('\n')
+            tmux('set-option','-t',cfg['session'],'status-right',HELPER.upper().replace('#','##')+f' CAN TYPE | stop-{HELPER_SLUG} to revoke | max 5 min')
+            child=subprocess.Popen(TMUX+['attach-session','-E','-t','='+cfg['session']],preexec_fn=supervised)
+            while child.poll() is None:
+                current=read(consent)
+                if (time.time()>=expiry or current.get('id')!=request['id'] or
+                    type(current.get('expires')) not in (int,float) or current['expires']<=time.time()): break
+                time.sleep(.2)
+        finally:
+            if child is not None and child.poll() is None:
+                child.terminate()
+                try: child.wait(timeout=2)
+                except subprocess.TimeoutExpired: child.kill();child.wait()
+            if old_status is not None:
+                subprocess.run(TMUX+['set-option','-t',cfg['session'],'status-right',old_status],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            if read(consent).get('id')==request['id']: consent.unlink(missing_ok=True)
+            if read(control_request).get('id')==request['id']: control_request.unlink(missing_ok=True)
+elif mode=='demo-view':
+    key=str(pathlib.Path.home()/'.ssh/family_help_demo_view_ed25519')
+    os.execv('/usr/bin/ssh',['ssh','-F','/dev/null','-tt','-i',key,'-o','IdentitiesOnly=yes','-o','IdentityAgent=none',
+        '-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile=/etc/family-help/localhost_known_hosts',
+        '-o','GlobalKnownHostsFile=/dev/null','-o','ClearAllForwardings=yes','-o','ForwardAgent=no',
+        '-o','ConnectTimeout=4','-p',str(cfg.get('port',22)),cfg['viewer']+'@127.0.0.1'])
+elif mode=='desktop-watch':
+    if not os.environ.get('DBUS_SESSION_BUS_ADDRESS'): sys.exit('Graphical user session required')
+    with (state/'desktop.lock').open('a') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        seen_demo='';seen_control='';notice_id=0
+        while True:
+            request=read(control_request)
+            if request.get('id')!=seen_control and request and 0<=time.time()-request.get('time',0)<=600:
+                identifier(request['id'])
+                result=subprocess.run(['/usr/bin/omarchy-notification-send','--app-name','Family Help','-u','critical','-p','-r',str(notice_id),
+                    f'{HELPER} asks to type',f'Click to allow {HELPER} to type in your learning terminal for five minutes. Run stop-{HELPER_SLUG} to revoke.',
+                    '--exec','/usr/local/libexec/family-help-child','allow',request['id']],check=True,timeout=8,capture_output=True,text=True)
+                notice_id=int(result.stdout.strip())
+                seen_control=request['id']
+            if notice_id and (not request or time.time()-request.get('time',0)>600 or read(consent).get('id')==request.get('id')):
+                subprocess.run(['/usr/bin/busctl','--user','call','org.freedesktop.Notifications','/org/freedesktop/Notifications',
+                                'org.freedesktop.Notifications','CloseNotification','u',str(notice_id)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=4)
+                notice_id=0
+            demo=read(pathlib.Path('/run/family-help-demo/active.json'))
+            if demo.get('id')!=seen_demo and demo and time.time()<demo.get('expires',0):
+                identifier(demo['id'])
+                subprocess.Popen(['/usr/bin/omarchy-launch-terminal','/usr/bin/env','TERM=xterm-256color','/usr/local/bin/watch-'+HELPER_SLUG],
+                                 stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+                seen_demo=demo['id']
+            time.sleep(1)
+else: sys.exit('Unknown mode')

@@ -4,7 +4,13 @@ Visible, consent-based terminal assistance for Omarchy PCs on a trusted local ne
 
 **Experimental community shell plugin and CLI.** Not an official Omarchy plugin, not affiliated with or endorsed by the Omarchy maintainers, and not yet validated as a complete multi-PC deployment. The optional inline interface initially targets the inspected Omarchy 4.0 plugin APIs; the native notification/menu backend remains the default.
 
-## What it does
+## Reusable Ask Dad enrollment
+
+The [enrollment guide](docs/ENROLLMENT.md) covers the newer polling deployment: a native screenshot-capable Ask Dad widget, top-right question-mark bar icon, child-consented typing, read-only admin demonstrations and parent-approved Omarchy installs. Start with `./master-installation.sh configure`, then `./master-installation.sh plan` as the helper desktop user. Choose Dad, Mom, or another parent/guardian as the sole helper; labels and command aliases follow that choice. Private profiles stay outside Git; adding a second helper is deferred.
+
+Read the [implementation and verification record](docs/ASSISTANCE_LESSONS.md): individual functions were verified on two PCs, while the new enrollment orchestrator has isolated tests and still needs a clean-machine rollout. It deliberately does not enable the experimental parental policy/PAM/Dino modules. This polling deployment and the older push prototype below are separate installation paths; do not layer their aliases/configuration blindly.
+
+## Original push prototype: what it does
 
 - A learner starts a dedicated tmux learning terminal.
 - `ask-dad "Could you help explain this?"` or `ask-mom "Could you help explain this?"` sends a bounded message over independent authenticated SSH routes.
@@ -40,7 +46,7 @@ Each learner uses a generic configured peer ID such as `learner-a`. Multiple lea
 6. For inline buttons and desktop theme integration, follow [INLINE_UI.md](docs/INLINE_UI.md).
 7. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
 
-No curl-to-shell installer, automatic account creation, driver changes, firewall edits or SSH policy changes are provided. Do not run the user installer as root. No default keyboard shortcuts or monitor layouts are changed.
+The original user installer does not require root and does not change SSH policy. The opt-in master enrollment separately uses private parent authentication to install root helpers and a locked forced-viewer system account/SSH Match rule; it does not create human accounts, grant child sudo, upgrade packages, reboot or change the firewall. No default keyboard shortcuts or monitor layouts are changed.
 
 **Control remains opt-in.** Notifications and forwarding never approve control; opening the terminal from either path is read-only. Helper requests control with `family-lab assist learner-a`; learner approves locally with `family-lab allow-control`. Ctrl+B then Ctrl+R revokes control without ending the learning session. Control gives a trusted helper the learning account’s shell capabilities; it is not a sandbox.
 

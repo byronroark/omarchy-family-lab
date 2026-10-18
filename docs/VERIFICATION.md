@@ -1,3 +1,5 @@
+> The newer polling widget/approval deployment and its master enrollment script have a separate [implementation record](ASSISTANCE_LESSONS.md) and [enrollment acceptance checklist](ENROLLMENT.md). Individual paths passed live two-PC tests; clean-machine master-script enrollment remains unverified. The status below describes the older push/inline and experimental policy modules unless explicitly stated otherwise.
+
 # Verification status
 
 The current prototype was checked against locally installed Omarchy helper source. That notification helper accepts an argument-vector click command through `--exec`; the terminal helper forwards a command vector through its desktop terminal launcher. This is evidence about inspected source, not a guarantee across Omarchy releases.

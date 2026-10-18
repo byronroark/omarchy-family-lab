@@ -1,0 +1,10 @@
+#!/usr/bin/python3
+import os,pathlib,sys
+from family_menu import user_step,entry
+if len(sys.argv)==3 and sys.argv[1]=='--user':
+    try:user_step(sys.argv[2])
+    except Exception as exc:sys.exit(str(exc))
+elif len(sys.argv)==2:
+    entry(sys.argv[1])
+    os.execv('/usr/local/libexec/family-software-request',['family-software-request','menu',sys.argv[1]])
+else:sys.exit('Invalid menu action')
