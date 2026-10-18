@@ -1,0 +1,24 @@
+#!/usr/bin/python3
+"""Forced SSH endpoint: one bounded JSON operation to the local approval socket."""
+import json,os,select,socket,sys,time
+from family_approval import MAX_WIRE,send_message,read_message
+# No remote arguments, PTY, shell, paths or command-line operations.
+if len(sys.argv)!=1 or os.environ.get('SSH_ORIGINAL_COMMAND','') or os.isatty(0):sys.exit('Only the enrolled approval protocol is accepted')
+raw=b'';deadline=time.monotonic()+8
+try:
+    while b'\n' not in raw:
+        left=deadline-time.monotonic()
+        if left<=0 or not select.select([0],[],[],left)[0]:raise ValueError('Approval input timed out')
+        chunk=os.read(0,min(4096,MAX_WIRE+1-len(raw)))
+        if not chunk:raise ValueError('Incomplete approval operation')
+        raw+=chunk
+        if len(raw)>MAX_WIRE:raise ValueError('Approval operation too large')
+    line,extra=raw.split(b'\n',1)
+    if extra:raise ValueError('Only one operation is accepted')
+    operation=json.loads(line)
+    with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as connection:
+        connection.settimeout(45);connection.connect('/run/family-help-approval/control.sock')
+        send_message(connection,operation);response=read_message(connection)
+    print(json.dumps(response,separators=(',',':')))
+except (OSError,ValueError,RecursionError) as exc:
+    print(json.dumps({'ok':False,'error':str(exc)[:300]}));sys.exit(1)

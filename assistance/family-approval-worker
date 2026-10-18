@@ -1,0 +1,46 @@
+#!/usr/bin/python3
+"""Socket-activated delegated app worker. Root config is the only authority."""
+import grp,json,os,pathlib,pwd,signal,socket,sys,threading
+from family_approval import Broker,serve_connection,trusted
+from family_approval_actions import Actions
+if os.geteuid()!=0:sys.exit('Approval worker requires the installed root service')
+if os.environ.get('LISTEN_PID')!=str(os.getpid()) or os.environ.get('LISTEN_FDS')!='1':sys.exit('Start using the installed approval socket/service')
+os.umask(0o077)
+config_path=pathlib.Path('/etc/family-help/approvers.json');teaching_path=pathlib.Path('/etc/family-help/teaching.json')
+for candidate in (config_path,teaching_path):trusted(candidate)
+config=json.loads(config_path.read_text());teaching=json.loads(teaching_path.read_text())
+base=pathlib.Path('/var/lib/family-software')
+for folder in (base,base/'audit',base/'results',base/'approval-reviews',base/'approval-jobs'):trusted(folder)
+# Only the already validated systemd listening socket is inherited. Package/child
+# subprocesses close descriptors; parent transport has neither sudo nor a PTY.
+listener=socket.socket(fileno=3);listener.settimeout(1)
+def identity_guard(uid,entry):
+    trusted(config_path)
+    current=json.loads(config_path.read_text())['principals'].get(str(uid))
+    if current!=entry or not current.get('enabled'):raise ValueError('Approval permissions changed; refresh enrollment')
+    user=pwd.getpwuid(uid)
+    approval_gid=grp.getgrnam('family-help-approvers').gr_gid;groups=set(os.getgrouplist(user.pw_name,user.pw_gid))
+    if not 0<uid<1000 or user.pw_name!='familyap-'+entry['id'] or grp.getgrgid(user.pw_gid).gr_name!=user.pw_name or approval_gid not in groups or not groups<={user.pw_gid,approval_gid}:raise ValueError('Approval transport identity was removed or changed')
+actions=Actions(teaching);broker=Broker(base,config['principals'],actions.plan,actions.execute,poller=actions.poll,identity_guard=identity_guard)
+with broker.lock():broker.recover()
+stop=threading.Event();reload_config=threading.Event()
+signal.signal(signal.SIGHUP,lambda *_:reload_config.set())
+def jobs():
+    while not stop.is_set():
+        try:
+            if not broker.run_next():stop.wait(1)
+        except BlockingIOError:stop.wait(1)
+        except Exception as exc:print('Approval job unavailable: '+str(exc),file=sys.stderr,flush=True);stop.wait(5)
+thread=threading.Thread(target=jobs,daemon=True);thread.start()
+for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:stop.set())
+try:
+    while not stop.is_set():
+        if reload_config.is_set():
+            trusted(config_path);candidate=json.loads(config_path.read_text())
+            broker.principals=candidate['principals'];reload_config.clear()
+        try:connection,_=listener.accept()
+        except socket.timeout:continue
+        with connection:
+            try:serve_connection(connection,broker)
+            except (OSError,ValueError) as exc:print('Approval connection closed: '+str(exc),file=sys.stderr,flush=True)
+finally:stop.set();listener.close()

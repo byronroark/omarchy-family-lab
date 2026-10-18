@@ -184,6 +184,8 @@ class HelpApp(Gtk.Application):
         self.label('Help requested: '+label,'prompt')
         self.label({'help':'Help me','watch':'Watch me','admin':'Admin task'}.get(data.get('topic'),'Help me'),'muted')
         self.label(data['message'])
+        if IDENTITY_CONFIG.get('capability','technical')=='approver':
+            return self.build_approver(data)
         if 'software' in data:
             from family_software import validate_request
             validate_request(data)
@@ -216,7 +218,65 @@ class HelpApp(Gtk.Application):
         row=self.row()
         for action,label in [('help','Help together'),('admin','Admin demonstration'),('watch','Watch only'),('dismiss','Dismiss')]:
             self.button(label,lambda action=action:self.choose(action),row,'primary' if action=='help' else '')
-    def choose(self,action):print(action,flush=True);self.win.close()
+    def build_approver(self,data):
+        if 'software' not in data:
+            self.label('This request needs the technical helper. Your account can approve app installs but cannot open an admin or typing session.','muted')
+            self.button('Dismiss',lambda:self.choose('dismiss'),self.row());return
+        path=pathlib.Path.home()/'.local/state/family-help/reviews'/(data['id']+'.json')
+        self.review=json.loads(bounded_file(path,65536))
+        if self.review.get('already_decided') and self.review.get('id')==data['id']:
+            self.approval_id=data['id'];return self.build_approval_status('Status: '+self.review['status'])
+        if self.review.get('id')!=data['id'] or self.review.get('expires',0)<=time.time():raise ValueError('Approval review expired; reopen the request')
+        plan=self.review['plan'];self.approval_id=data['id']
+        self.label(plan['title'],'prompt');self.label(plan['reason'],'muted')
+        if plan.get('requested'):self.label('Requested: '+', '.join(plan['requested']),'muted')
+        if plan.get('transaction'):
+            self.label('Exact packages, including dependencies:','prompt')
+            scroll=Gtk.ScrolledWindow();scroll.set_min_content_height(130);scroll.set_max_content_height(180)
+            details=Gtk.Label(label='\n'.join(plan['transaction']),xalign=0);details.set_selectable(True)
+            scroll.set_child(details);self.box.append(scroll)
+        elif plan.get('supported'):self.label('Packages are already installed; any reviewed app setup still runs.','muted')
+        self.label('Approval is limited to this reviewed request. You do not need an administrator password.','muted')
+        self.approval_feedback=self.label('','status');row=self.row();self.approval_buttons=[]
+        if plan.get('supported'):self.approval_buttons.append(self.button('Approve installation',lambda:self.choose('approve'),row,'primary'))
+        self.approval_buttons.append(self.button('Deny request',lambda:self.choose('deny'),row,'danger'))
+        self.button('Dismiss',lambda:self.choose('dismiss'),row)
+    def build_approval_status(self,status):
+        child=self.box.get_first_child()
+        while child is not None:self.box.remove(child);child=self.box.get_first_child()
+        self.label('Request status','prompt');self.approval_feedback=self.label(status,'status')
+        self.label('The child can see the result too. Closing this window does not cancel a queued or running install.','muted')
+        self.button('Close',self.win.close,self.row())
+        self.status_deadline=time.monotonic()+1800
+        GLib.timeout_add(2000,self.poll_approval_status)
+    def poll_approval_status(self):
+        if self.busy:return True
+        if time.monotonic()>self.status_deadline:return False
+        from family_approval_client import rpc
+        self.busy=True
+        def done(result,error):
+            self.busy=False
+            if error:self.approval_feedback.set_text(error);return
+            status=result['status'];self.approval_feedback.set_text('Status: '+status)
+            if status in ('completed','failed','denied','interrupted'):self.status_deadline=0
+        self.background(lambda:rpc(IDENTITY_CONFIG,{'op':'status','id':self.approval_id}),done)
+        return True
+    def choose(self,action):
+        if IDENTITY_CONFIG.get('capability','technical')=='approver' and action in ('approve','deny'):
+            if self.busy:return
+            from family_approval_client import decision
+            self.busy=True
+            for button in self.approval_buttons:button.set_sensitive(False)
+            self.approval_feedback.set_text('Sending your decision…')
+            def done(result,error):
+                self.busy=False
+                if error:
+                    self.approval_feedback.set_text(error+' The decision could not be confirmed. Check status before trying again.')
+                    self.button('Check request status',lambda:self.build_approval_status('Checking status…'),self.row())
+                else:self.build_approval_status('Status: '+result['status'])
+            self.background(lambda:decision(IDENTITY_CONFIG,self.review,action),done)
+            return
+        print(action,flush=True);self.win.close()
     def cleanup(self,*_args):
         if self.draft:self.draft.unlink(missing_ok=True)
         return False
