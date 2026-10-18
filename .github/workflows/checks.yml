@@ -10,7 +10,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install tmux
-        run: sudo apt-get update && sudo apt-get install -y tmux python3-gi gir1.2-gdkpixbuf-2.0
+        run: sudo apt-get update && sudo apt-get install -y tmux openssh-server python3-gi gir1.2-gdkpixbuf-2.0
       - name: Check Python syntax
         run: python3 -m py_compile scripts/family-lab
       - name: Check shell syntax
@@ -43,3 +43,5 @@ jobs:
         run: python3 tests/check_software_approval.py && python3 tests/check_menu_approvals.py && /usr/bin/python3 tests/check_help_widget.py
       - name: Verify teaching consent lifecycle with isolated tmux
         run: python3 tests/check_teaching_control.py
+      - name: Verify approval-only identities, one-shot worker and parent cards (no installation)
+        run: python3 tests/check_delegated_approval.py && python3 tests/check_delegated_setup.py && python3 tests/check_approval_widget.py

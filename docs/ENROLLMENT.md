@@ -1,6 +1,6 @@
 # Reusable enrollment for the verified Ask Dad workflow
 
-This is the polling workflow implemented in `assistance/`, with a native GTK request widget, screenshots, a top-right bar icon, consented typing, an independently authenticated admin demonstration, and named software approvals. The selected helper connects to the learner and does **not** need an SSH server. Enrollment asks whether the helper is Dad, Mom, or another parent/guardian and what the child should call that person. Mom can be the only technical parent; no Dad login or device is required. A second helper can be recorded but is not enrolled yet.
+This is the polling workflow implemented in `assistance/`, with a native GTK request widget, screenshots, a top-right bar icon, consented typing, an independently authenticated admin demonstration, and named software approvals. The selected helper connects to the learner and does **not** need an SSH server. Enrollment asks whether the helper is Dad, Mom, or another parent/guardian and what the child should call that person. Mom can be the only technical parent; no Dad login or device is required. Additional approval-only parents can be enrolled through the [delegated approval guide](APPROVAL_ONLY.md); a second technical helper is not enrolled by this primary setup path.
 
 The older `scripts/family-lab` push transport, forwarding and inline QML card are separate prototypes. Do not complete the old manual/PDF instructions over this installation: their `ask-dad` aliases and SSH transport differ. This installer stops at conflicting user command aliases rather than silently replacing them.
 
@@ -33,7 +33,7 @@ Review this repository and run from its root, as the selected helper’s normal 
 ./master-installation.sh plan
 ```
 
-The interactive prompts first ask **Dad / Mom / another parent or guardian**, then the helper display name. They ask for a stable learner ID, child login/display label/IP/SSH port, a separate administrator login/key path, the selected helper login/IP, and an optional additional parent login/IP (not enrolled). The helper role is presentation and routing; administrator rights still belong only to the separate administrator account. Nothing hardcodes a particular child or machine.
+The interactive prompts first ask **Dad / Mom / another parent or guardian**, the helper display name, and **technical / approver** access. This page describes the **technical** branch; for approver access use [APPROVAL_ONLY.md](APPROVAL_ONLY.md). Both technical and approval-only enrollment include quick app approvals by default and ask for a stable parent ID and reviewed app scope. This adds the same Approve installation / Deny request card while retaining an explicit private administrator review option; see [quick approvals for technical helpers](APPROVAL_ONLY.md#quick-approvals-for-technical-mom-or-dad). They ask for a stable learner ID, child login/display label/IP/SSH port, a separate administrator login/key path, the selected helper login/IP, and an optional additional parent login/IP (not enrolled). The helper role is presentation and routing; administrator rights still belong only to the separate administrator account. Nothing hardcodes a particular child or machine.
 
 The private profile defaults to `~/.config/family-help/setup.json` (mode 600). Use `--profile /absolute/private/path.json` consistently for another location. Profiles and enrollment bundles must stay outside the checkout. `plan` reads the profile and prints proposed actions; it makes no system changes or network connections. With no command the script selects `plan`.
 
@@ -44,11 +44,11 @@ The private profile defaults to `~/.config/family-help/setup.json` (mode 600). U
 ./master-installation.sh bundle --out "$HOME/.local/state/family-help/enrollment-bundle"
 ```
 
-Helper apply verifies the host fingerprint, creates three independent restricted-role Ed25519 keys, installs the local watcher/programs, and writes a dedicated SSH configuration. These unattended keys are for polling, read-only viewing and consented typing only. Administrator access retains its separate encrypted key and private interactive authentication. No SSH agent or forwarding is exposed to the child.
+Helper apply verifies the host fingerprint, creates three independent restricted-role Ed25519 keys (plus a fourth for the included quick approvals on new technical enrollment), installs the local watcher/programs, and writes a dedicated SSH configuration. The original three unattended keys are for polling, read-only viewing and consented typing only. The approval key is authorized only on its separate locked transport account, never for a learner or administrator shell. Administrator access retains its separate encrypted key and private interactive authentication. No SSH agent or forwarding is exposed to the child.
 
 The bundle contains the reviewed source, public role keys and private enrollment configuration. It contains **no private keys, logs or Git history**. Keep it private because it still contains family login names and addresses. Existing bundle directories are never overwritten; choose a new destination for another bundle.
 
-The current helper UI supports **one learner and one selected helper per desktop profile**. IDs and device settings are reusable; simultaneous multiple-child queues and second-helper enrollment are future work. Existing enrollment with a different learner ID is refused.
+The current helper UI supports **one learner and one selected helper per desktop profile**. IDs and device settings are reusable; simultaneous multiple-child queues and additional technical-helper enrollment are future work; approval-only recipients use the separate delegated path. Existing enrollment with a different learner ID is refused.
 
 ## 3. Copy and apply on the learner using the parent account
 

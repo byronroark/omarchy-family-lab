@@ -55,7 +55,7 @@ These observations validate the individual deployed paths, not a fresh run of th
 - The new software **update request** broker route, every default agent, controller changes and each manual-review branch have not all been tested end to end. Parent-managed updates and Lutris/package approve/deny have been tested separately.
 - The menu catalog targets inspected 4.0.5 helper sources. It is not automatic compatibility with all future Omarchy releases. Hash mismatch downgrades to manual review; reviewed migrations also require maintenance.
 - Agent downloads and application installation remain deliberate parent choices. Fixed approved package transactions may execute distribution package hooks as root. The child configuration phase has user-level capabilities, not an application sandbox.
-- Second-helper enrollment/GUI management and simultaneous multiple-learner queues, broader polkit/container/device auditing, unattended approvals, and arbitrary terminal-sudo interception are not implemented. Terminal admin tasks use the private parent workflow.
+- Additional technical-helper enrollment/GUI management and simultaneous multiple-learner queues, broader polkit/container/device auditing, unattended approvals, and arbitrary terminal-sudo interception are not implemented. Terminal admin tasks use the private parent workflow.
 - Experimental reporting, policy/PAM, time enforcement and Dino modules are not enabled by this installer. Their merged code still requires its own deployment acceptance.
 
 See [ENROLLMENT.md](ENROLLMENT.md) for the reproducible setup and the live checklist; see [SECURITY.md](../SECURITY.md) before relying on the boundaries.
@@ -63,3 +63,17 @@ See [ENROLLMENT.md](ENROLLMENT.md) for the reproducible setup and the live check
 ## Configurable primary helper follow-up
 
 Enrollment now asks for Dad, Mom, or another parent/guardian and a child-facing display name. Mom can be the sole technical helper without a Dad account or device. Widget text, question placeholder, consent/status messages, menu descriptions, application name and tray tooltip follow this setting. Role-specific and neutral command aliases map to the single selected helper; administrator authentication remains separate. Legacy Dad configurations remain readable. These changes have automated Mom/guardian configuration, UI and compatibility coverage; a live Mom enrollment has not yet been performed.
+
+## Approval-only parent implementation
+
+The next feature separates technical help from delegated approve/deny access. Additional parents use independent locked SSH transport identities, a peer-UID-authenticated root Unix-socket worker, frozen versioned app plans and one-shot durable jobs. No admin credentials, sudoers grant or technical-session aliases are enrolled for this role, and existing technical keys/desktop configuration are preserved. See [APPROVAL_ONLY.md](APPROVAL_ONLY.md) for exact scope, trusted bootstrap requirements, recovery and outstanding live acceptance. Updates, agents, drivers/input-group changes and arbitrary sudo prompts are deliberately outside this first delegated app worker.
+
+## Technical helper quick approvals
+
+Every new technical Mom/Dad enrollment includes the same scoped approve/deny app card alongside private admin review; approval-only parents receive approve/deny too. It adds an independent restricted approval transport key; ordinary teaching/help actions and encrypted administrator access remain available. Legacy technical profiles do not opt in automatically. Isolated enrollment, card and real local socket protocol tests cover this combination; household deployment and a real quick-approved package install remain outstanding. Endpoint-only enrollment avoids rewriting existing learner keys or desktop configuration.
+
+## First technical quick-approval upgrade
+
+The existing manually deployed technical helper was upgraded through endpoint-only enrollment, preserving the learner's help keys, menu/widget and teaching configuration. Live SSH policy, root/group socket permissions, standard learner groups and viewer restrictions passed; the new restricted credential rejected a shell command and the original technical SSH and polling still worked. The parent cards were upgraded with private before-images. A real child-menu repository-package request was denied from the technical parent card without a password prompt; a fresh request was then approved the same way. Both child windows and the worker’s public receipts matched (`denied` / `completed`, return code 0). The approved package was already installed, so this was a successful no-op execution; installation of a newly absent package remains a separate acceptance step.
+
+This rollout caught two installer mistakes before activation: a denial-only `!/usr/bin/asdcontrol` sudo rule was misclassified as a grant, and `PermitUserEnvironment` was emitted inside an SSH Match block where it is invalid. The sudo parser now accepts only complete simple denial rules and rejects positive/mixed/wrapped/unknown rules. The SSH Match uses inherited global environment policy and verifies that it is disabled; enabling it globally is rejected. Regression tests use the real OpenSSH parser/effective policy, including newer mixed-case output. Neither fix edits household sudo rules or relaxes the forced-command boundary.

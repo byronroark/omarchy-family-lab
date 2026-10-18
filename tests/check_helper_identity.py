@@ -39,6 +39,10 @@ class HelperIdentity(unittest.TestCase):
                 self.assertFalse(any('Dad' in value for value in labels))
                 app.choose=lambda *args:None;ns['build_parent'](app)
                 for label in ('Help together','Admin demonstration','Watch only','Dismiss'):self.assertIn(label,labels)
+                ns['IDENTITY_CONFIG']['quick_approval']=True
+                labels.clear();ns['build_parent'](app)
+                for label in ('Help together','Admin demonstration','Watch only','Dismiss'):self.assertIn(label,labels)
+                ns['IDENTITY_CONFIG'].pop('quick_approval')
                 request.update(topic='admin',time=__import__('time').time(),software={'action':'install','packages':['extra/jq']})
                 ns['build_parent'](app)
                 for label in ('Review and approve','Deny request'):self.assertIn(label,labels)
