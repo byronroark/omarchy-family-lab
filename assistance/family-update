@@ -29,6 +29,9 @@ umask 077
 mkdir -p "$logs"
 log=$(mktemp "$logs/update-XXXXXXXX.log")
 printf 'System update transcript: %s\n' "$log"
+# Remote approvals start with a clean environment, without desktop shell exports.
+# Always use the packaged installation; never inherit a caller's dev checkout.
+export OMARCHY_PATH=/usr/share/omarchy
 # Avoid the updater's shared /tmp transcript; keep its actual update logic intact.
 /usr/bin/script -qefc '/usr/bin/env OMARCHY_UPDATE_LOGGED=1 /usr/bin/omarchy update' "$log"
 echo 'System updater finished. Applying reviewed child migrations next.'
