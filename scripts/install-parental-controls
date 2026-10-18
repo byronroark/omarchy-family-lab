@@ -101,6 +101,8 @@ def main():
     with os.fdopen(fd,'wb') as output:
         output.write(source.read_bytes());output.flush();os.fsync(output.fileno())
     os.chmod(executable,0o755);os.replace(executable,'/usr/local/libexec/family-lab-policy')
+    for name in ('family_breaks.py','family_guard.py'):
+        shutil.copyfile(root/'parental'/name,'/usr/local/libexec/'+name);os.chmod('/usr/local/libexec/'+name,0o644)
     shutil.copyfile(root/'systemd/family-lab-policy.service','/etc/systemd/system/family-lab-policy.service')
     os.chmod('/etc/systemd/system/family-lab-policy.service',0o644)
     m.atomic(config_path,config,0o644)

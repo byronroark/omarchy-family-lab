@@ -184,6 +184,14 @@ class HelpApp(Gtk.Application):
         self.label('Help requested: '+label,'prompt')
         self.label({'help':'Help me','watch':'Watch me','admin':'Admin task'}.get(data.get('topic'),'Help me'),'muted')
         self.label(data['message'])
+        if 'policy_help' in data:
+            from family_policy_client import validate_card
+            validate_card(data)
+            self.label('Bedtime or screen-time help','prompt')
+            self.label('Open parent controls to review settings or skip bedtime for today. This request grants no extra time by itself.','muted')
+            self.button('Open parent controls',lambda:self.choose('time-controls'),self.row(),'primary')
+            self.button('Dismiss',lambda:self.choose('dismiss'),self.row());return
+        if 'break_request' in data:return self.build_break(data)
         if IDENTITY_CONFIG.get('capability','technical')=='approver' or (IDENTITY_CONFIG.get('quick_approval') is True and 'software' in data):
             return self.build_approver(data)
         if 'software' in data:
@@ -218,6 +226,34 @@ class HelpApp(Gtk.Application):
         row=self.row()
         for action,label in [('help','Help together'),('admin','Admin demonstration'),('watch','Watch only'),('dismiss','Dismiss')]:
             self.button(label,lambda action=action:self.choose(action),row,'primary' if action=='help' else '')
+    def build_break(self,data):
+        from family_policy_client import validate_card
+        validate_card(data);self.break_id=data['id']
+        self.label('Change this break only','prompt')
+        self.label('This decision does not change the regular one-hour / fifteen-minute schedule or bedtime. The break continues while you decide.','muted')
+        self.break_feedback=self.label('Awaiting your decision','status');self.break_buttons=[];row=self.row()
+        self.break_buttons.append(self.button('Approve break change',lambda:self.decide_break('approve'),row,'primary'))
+        self.break_buttons.append(self.button('Deny request',lambda:self.decide_break('deny'),row,'danger'))
+        self.button('Dismiss',lambda:self.choose('dismiss'),row)
+    def decide_break(self,choice):
+        if self.busy:return
+        from family_policy_client import request
+        self.busy=True
+        for button in self.break_buttons:button.set_sensitive(False)
+        def done(result,error):
+            self.busy=False
+            if error:
+                self.break_feedback.set_text('Decision could not be confirmed: '+error)
+                self.button('Check decision status',self.check_break,self.row())
+            else:self.break_feedback.set_text('Break request: '+result['status'])
+        self.background(lambda:request({'op':'break-decision','id':self.break_id,'decision':choice}),done)
+    def check_break(self):
+        if self.busy:return
+        from family_policy_client import request
+        self.busy=True
+        def done(result,error):
+            self.busy=False;self.break_feedback.set_text(error if error else 'Break request: '+result['status'])
+        self.background(lambda:request({'op':'break-status','id':self.break_id}),done)
     def build_approver(self,data):
         if 'software' not in data:
             self.label('This request needs the technical helper. Your account can approve app installs but cannot open an admin or typing session.','muted')
