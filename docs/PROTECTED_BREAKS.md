@@ -22,7 +22,7 @@ New policies remain **off**. Set the timezone, allowed hours and break durations
 
 ## Live acceptance before enforcement
 
-Keep a verified administrator connection and local recovery available. The root-only local request `{"op":"guard-trial","peer":"LEARNER_ID","seconds":60}` tests protection with the regular policy off. It automatically restores the prior usage state, has a 120-second watchdog and expires across reboot. Confirm the Dino screen covers every display, open work survives, normal desktop input is blocked, and Return to my work restores that work. Verify the separate administrator remains accessible and learner login is denied during protection.
+Keep a verified administrator connection and local recovery available. The root-only local request `{"op":"guard-trial","peer":"LEARNER_ID","seconds":60}` tests protection with the regular policy off. It automatically restores the prior usage state, allows 15–600 seconds with a watchdog two minutes beyond the requested duration and expires across reboot. Confirm the Dino screen covers every display, open work survives, normal desktop input is blocked, and Return to my work restores that work. Verify the separate administrator remains accessible and learner login is denied during protection.
 
 The root-only `{"op":"accept-guard","peer":"LEARNER_ID"}` requires a recent same-boot secure-lock and fresh-release receipt. It records installed source hashes; changed guard sources invalidate acceptance. Only then can a parent enable enforcement. Automated fixture tests are not this live acceptance.
 

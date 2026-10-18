@@ -441,15 +441,15 @@ class Engine:
                 return {'accepted':req['peer']}
             if op=='guard-trial' and set(req)=={'op','peer','seconds'}:
                 if uid!=0:raise PermissionError('Only the local administrator can start a bounded guard trial')
-                peer=identifier(req['peer']);seconds=integer(req['seconds'],15,60)
+                peer=identifier(req['peer']);seconds=integer(req['seconds'],15,600)
                 if peer not in self.config['subjects'] or self.guard_trial is not None or self.current['policy']['subjects'][peer]['mode']!='off' or peer not in self.config.get('guards',{}).values():raise ValueError('Use a single enrolled, disabled learner policy for the trial')
-                now,elapsed=time.time(),boottime();state=copy.deepcopy(self.breaks.state);prior=copy.deepcopy(state['learners'].get(peer))
-                self.guard_trial={'peer':peer,'boot':self.boot,'expires':now+120,'deadline':elapsed+120,'prior':prior,'protected':False}
+                now,elapsed=time.time(),boottime();maximum=seconds+120;state=copy.deepcopy(self.breaks.state);prior=copy.deepcopy(state['learners'].get(peer))
+                self.guard_trial={'peer':peer,'boot':self.boot,'expires':now+maximum,'deadline':elapsed+maximum,'prior':prior,'protected':False}
                 atomic(self.data/'guard-trial.json',self.guard_trial)
                 state['learners'][peer]={'used':3600,'rest':{'episode':uuid.uuid4().hex,'revision':0,'expires':now+seconds,'deadline':elapsed+seconds,'boot':self.boot,'protected':False,'seconds':seconds}}
                 self.breaks.commit(state);self.generation+=1
                 self.audit(who,op,{'peer':peer,'seconds':seconds})
-                return {'trial':peer,'maximum_seconds':120,'break_seconds':seconds}
+                return {'trial':peer,'maximum_seconds':maximum,'break_seconds':seconds}
             if op=='break-adjust' and set(req)=={'op','peer','episode','revision','change','minutes'}:
                 if uid==0:raise ValueError('Use the enrolled parent endpoint for a break adjustment')
                 peer=identifier(req['peer'])

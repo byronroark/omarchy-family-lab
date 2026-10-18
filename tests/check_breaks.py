@@ -139,6 +139,12 @@ class EngineTests(unittest.TestCase):
             self.assertTrue(self.engine.learner_request(959,{'op':'guard-release'})['allowed'])
             self.assertTrue(self.policy.read(self.home/'data/guard-trial-result.json')['release_checked'])
         self.assertEqual(self.engine.breaks.view('child',self.now,self.engine.boot,115)['used_seconds'],0)
+    def test_long_trial_is_bounded_and_root_only(self):
+        self.engine.current['policy']['subjects']['child']['mode']='off'
+        with self.assertRaises(ValueError):self.engine.request(0,{'op':'guard-trial','peer':'child','seconds':601})
+        result=self.engine.request(0,{'op':'guard-trial','peer':'child','seconds':600})
+        self.assertEqual(result['maximum_seconds'],720)
+        self.assertEqual(self.engine.current['policy']['subjects']['child']['mode'],'off')
     def test_break_skip_does_not_override_bedtime(self):
         state=self.due();self.engine.current['policy']['subjects']['child']['mode']='enforce'
         self.now+=12*3600;self.engine.tick({2101},self.now,70,100)
