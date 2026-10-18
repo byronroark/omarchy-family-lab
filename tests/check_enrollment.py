@@ -7,6 +7,19 @@ spec=importlib.util.spec_from_file_location('enrollment',ROOT/'setup/family_inst
 def key(number):return 'ssh-ed25519 '+base64.b64encode(b'\0\0\0\x0bssh-ed25519\0\0\0\x20'+bytes([number])*32).decode()
 def profile():return {'schema_version':1,'learner':{'login':'learner','id':'learner-a','label':'Learner A','host':'192.0.2.10','port':22},'admin':{'login':'parent','identity_file':'/not-read/admin-key'},'dad':{'login':'helper','host':'192.0.2.20'},'mom':{'enabled':False,'login':'otherparent','host':'192.0.2.30'},'bar':True,'public_keys':{name:key(i) for i,name in enumerate(('poll','view','control'),1)},'host_key':key(4),'host_fingerprint':m.fingerprint(key(4))}
 class Enrollment(unittest.TestCase):
+    def test_sudo_denials_are_not_grants_and_unknown_syntax_fails_closed(self):
+        account=types.SimpleNamespace(pw_name='learner')
+        heading='User learner may run the following commands on test-host:\n'
+        for rule in ('    (ALL) !ALL\n','    (ALL) !/usr/bin/asdcontrol\n','    (ALL) !ALL\n    (root) !/usr/bin/asdcontrol\n'):
+            with patch.object(m.subprocess,'run',return_value=types.SimpleNamespace(returncode=0,stdout=heading+rule,stderr='')):m.check_sudo_absent(account)
+        for rule in ('    (ALL) ALL','    (ALL) NOPASSWD: /usr/bin/pacman','    (ALL) !/usr/bin/asdcontrol, /bin/sh','    (ALL) !ALL\n        /bin/sh','    (ALL) !/usr/bin/*',''):
+            with self.subTest(rule=rule),patch.object(m.subprocess,'run',return_value=types.SimpleNamespace(returncode=0,stdout=heading+rule,stderr='')):
+                with self.assertRaises(ValueError):m.check_sudo_absent(account)
+        for status,output,accepted in ((1,'User learner is not allowed to run sudo on test-host.',True),(1,'policy plugin failed',False),(0,'unknown output',False)):
+            with patch.object(m.subprocess,'run',return_value=types.SimpleNamespace(returncode=status,stdout=output,stderr='')):
+                if accepted:m.check_sudo_absent(account)
+                else:
+                    with self.assertRaises(ValueError):m.check_sudo_absent(account)
     def test_profile_boundaries(self):
         m.validate(profile())
         cases=[]
@@ -171,6 +184,7 @@ class Enrollment(unittest.TestCase):
             def rollback(self):raise AssertionError('Unexpected rollback')
         def invoke(command,**kwargs):
             commands.append(command)
+            if command[:3]==['/usr/bin/sudo','-l','-U']:return types.SimpleNamespace(returncode=1,stdout='User learner is not allowed to run sudo on test-host.',stderr='')
             return types.SimpleNamespace(returncode=0,stdout='familyviewer L 1 0 99999 7 -1' if 'passwd' in command[0] else '',stderr='')
         def as_child(account,payload):
             self.assertEqual(account.pw_uid,12345);phases.append(payload['phase'])

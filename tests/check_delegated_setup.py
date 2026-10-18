@@ -1,5 +1,5 @@
 """Simulated root enrollment: intercept every account/service/file mutation."""
-import importlib.util,json,os,pathlib,types,unittest
+import importlib.util,json,os,pathlib,shutil,subprocess,tempfile,types,unittest
 from unittest.mock import patch
 from check_enrollment import profile,key,m as enroll
 ROOT=pathlib.Path(__file__).resolve().parents[1]
@@ -36,6 +36,24 @@ class Enrollment(unittest.TestCase):
         self.assertIn(['/usr/bin/systemctl','enable','--now','family-help-approval.socket'],commands)
     def test_add_technical_quick_approval_preserves_existing_configuration(self):
         self.test_add_parent_preserves_existing_technical_configuration(technical=True)
+    @unittest.skipUnless(shutil.which('sshd'),'OpenSSH server parser unavailable')
+    def test_generated_ssh_rule_with_real_parser(self):
+        p=profile();p.pop('dad');p.pop('mom');p['admin'].pop('identity_file')
+        p['helper']={'id':'mom','kind':'mom','label':'Mom','login':'helper','host':'192.0.2.20','capability':'approver'}
+        p['approval_scope']={'packages':[],'menus':[]};p['public_keys']={'approval':key(9)}
+        files=setup.desired_files(vars(enroll),p,959,{'version':1,'principals':{}})
+        rule=files['/etc/ssh/sshd_config.d/41-family-help-mom.conf'][0].decode()
+        with tempfile.TemporaryDirectory() as directory:
+            home=pathlib.Path(directory);host=home/'hostkey';config=home/'sshd.conf'
+            subprocess.run(['/usr/bin/ssh-keygen','-q','-t','ed25519','-N','','-f',str(host)],check=True)
+            config.write_text('HostKey '+str(host)+'\nPermitUserEnvironment no\n'+rule)
+            result=subprocess.run([shutil.which('sshd'),'-t','-f',str(config)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            result=subprocess.run([shutil.which('sshd'),'-T','-f',str(config),'-C','user=familyap-mom,host=localhost,addr=192.0.2.20'],capture_output=True,text=True,check=True)
+            setup.verify_policy({'run':lambda *args,**kwargs:result},'familyap-mom','mom')
+            config.write_text('HostKey '+str(host)+'\nPermitUserEnvironment yes\n'+rule)
+            result=subprocess.run([shutil.which('sshd'),'-T','-f',str(config),'-C','user=familyap-mom,host=localhost,addr=192.0.2.20'],capture_output=True,text=True,check=True)
+            with self.assertRaises(ValueError):setup.verify_policy({'run':lambda *args,**kwargs:result},'familyap-mom','mom')
     def test_effective_policy_must_match(self):
         api={'run':lambda *args,**kwargs:types.SimpleNamespace(stdout='forcecommand none\npermittty yes\n')}
         with self.assertRaises(ValueError):setup.verify_policy(api,'familyap-mom','mom')

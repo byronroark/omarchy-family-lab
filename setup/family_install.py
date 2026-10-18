@@ -265,7 +265,13 @@ def ensure_directory(path,mode):
 def check_sudo_absent(account):
     check=subprocess.run(['/usr/bin/sudo','-l','-U',account.pw_name],capture_output=True,text=True,env=dict(os.environ,LC_ALL='C'))
     if check.returncode not in (0,1) or (check.returncode==1 and 'not allowed' not in check.stdout+check.stderr):raise ValueError('Could not inspect learner sudo permissions')
-    if any(line.lstrip().startswith('(') and ')' in line and line.split(')',1)[1].strip()!='!ALL' for line in check.stdout.splitlines()):raise ValueError('Positive learner sudo grant found; inspect sudo -l locally before continuing')
+    heading=re.search(r'^User '+re.escape(account.pw_name)+r' may run the following commands on [^\n]+:\s*$',check.stdout,re.M)
+    if check.returncode==1 and heading is None:return
+    if heading is None:raise ValueError('Unrecognized sudo permission listing; inspect sudo -l locally')
+    # Accept only complete, simple denial rules. Reject positive grants, wrapped
+    # continuations, mixed command lists and unfamiliar syntax rather than guessing.
+    rules=[line.strip() for line in check.stdout[heading.end():].splitlines() if line.strip()]
+    if not rules or any(not re.fullmatch(r'\([^()]+\)\s+!(?:ALL|/[A-Za-z0-9_./+-]+)',line) for line in rules):raise ValueError('Positive or unrecognized learner sudo rule found; inspect sudo -l locally before continuing')
 def apply_learner(profile,args):
     if os.geteuid()!=0:raise ValueError('Learner installation requires private parent sudo authentication')
     if os.environ.get('SUDO_USER') not in (None,profile['admin']['login']):raise ValueError('Use the selected separate administrator')
@@ -470,7 +476,7 @@ def verify(profile,role):
 
 def verify_viewer_policy():
     value=run(['/usr/bin/sshd','-T','-C','user=familyviewer,host=localhost,addr=127.0.0.1'],capture_output=True,text=True).stdout
-    fields=dict(line.split(' ',1) for line in value.splitlines() if ' ' in line)
+    fields={key.lower():setting for line in value.splitlines() if ' ' in line for key,setting in [line.split(' ',1)]}
     expected={'forcecommand':'/usr/local/libexec/family-admin-demo view','authorizedkeysfile':'/etc/family-help/viewer_authorized_keys','passwordauthentication':'no','kbdinteractiveauthentication':'no','disableforwarding':'yes','permituserrc':'no','permittty':'yes','authenticationmethods':'publickey','authorizedkeyscommand':'none'}
     if any(fields.get(key)!=value for key,value in expected.items()):raise ValueError('Effective SSH viewer policy differs from the forced, read-only role; inspect earlier Match/global directives')
 

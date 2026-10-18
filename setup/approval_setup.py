@@ -52,7 +52,6 @@ def desired_files(api,profile,uid,registry):
     DisableForwarding yes
     PermitTTY no
     PermitUserRC no
-    PermitUserEnvironment no
     ForceCommand /usr/local/libexec/family-approval-bridge
 Match all
 '''
@@ -63,7 +62,7 @@ Match all
 
 def verify_policy(api,account,identifier):
     output=api['run'](['/usr/bin/sshd','-T','-C','user='+account+',host=localhost,addr=127.0.0.1'],capture_output=True,text=True).stdout
-    effective=dict(line.split(' ',1) for line in output.splitlines() if ' ' in line)
+    effective={key.lower():value for line in output.splitlines() if ' ' in line for key,value in [line.split(' ',1)]}
     expected={'forcecommand':'/usr/local/libexec/family-approval-bridge','authorizedkeysfile':'/etc/family-help/approvers/'+identifier+'.keys','authenticationmethods':'publickey','passwordauthentication':'no','kbdinteractiveauthentication':'no','permittty':'no','disableforwarding':'yes','permituserrc':'no','permituserenvironment':'no','authorizedkeyscommand':'none'}
     if any(effective.get(name)!=value for name,value in expected.items()):raise ValueError('Effective approval transport SSH policy is not restricted as expected')
 
