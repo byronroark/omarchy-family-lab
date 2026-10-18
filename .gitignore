@@ -39,3 +39,5 @@ reports/
 setup.local.json
 *.enrollment.json
 enrollment-bundle*/
+
+browser/google-home-redirect/_metadata/

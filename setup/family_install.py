@@ -5,7 +5,7 @@ No child sudo grants, package upgrades, PAM policy or power operations.
 """
 import argparse,base64,datetime,grp,hashlib,ipaddress,json,os,pathlib,pwd,re,runpy,shutil,stat,subprocess,sys,tempfile,uuid
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_approval.py','family_approval_client.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
+PROGRAMS=['family-help-child','family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_theme.py','family_approval.py','family_approval_client.py','family-admin-demo','family-migrate-child','family-update','family_software.py','family_menu.py','family-menu-action','family-menu-catalog.json','family-software-request','family-software-admin','family-software-execute','family-help-desktop-setup']
 def selected_helper(profile):
     if 'helper' in profile:
         if 'dad' in profile or 'mom' in profile:raise ValueError('Use helper/other_parent or legacy dad/mom fields, not both')
@@ -44,7 +44,7 @@ def public_key(value):
     if len(raw)!=51 or raw[:19]!=b'\0\0\0\x0bssh-ed25519\0\0\0\x20':raise ValueError('Malformed Ed25519 key')
     return ' '.join(parts[:2])
 def validate(profile):
-    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar','helper','other_parent','approval_scope'}
+    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar','helper','other_parent','approval_scope','policy_public_key','controls_timezone'}
     if not isinstance(profile,dict) or set(profile)-allowed or type(profile.get('schema_version')) is not int or profile.get('schema_version')!=1:raise ValueError('Unsupported setup profile')
     for role in ('learner','admin'):
         if not isinstance(profile.get(role),dict):raise ValueError('Missing role: '+role)
@@ -80,6 +80,14 @@ def validate(profile):
     if len({public_key(value) for value in keys.values()})!=len(keys):raise ValueError('SSH key roles must be independent')
     if 'identity_file' in profile['admin']:
         ssh_value(profile['admin']['identity_file'])
+    if profile.get('policy_public_key'):
+        policy_key=public_key(profile['policy_public_key'])
+        if policy_key in {public_key(value) for value in keys.values()}:raise ValueError('Policy key must be independent of assistance and app approval keys')
+        identifier=plain(helper.get('id'))
+        if len(identifier)>20:raise ValueError('Policy parent ID must have at most 20 characters')
+    if 'controls_timezone' in profile:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(profile['controls_timezone'])
     if profile.get('host_key'):public_key(profile['host_key'])
     return profile
 
@@ -383,7 +391,7 @@ def helper_files(profile,home,identity,keys):
         helper_settings={key:value for key,value in helper_settings.items() if key not in ('poll_alias','view_alias','control_alias','admin_alias')}
     if delegated(profile):helper_settings.update(approval_alias=alias,quick_approval=selected_helper(profile).get('quick_approval',False))
     result={}
-    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
+    for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_theme.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
         result['.local/bin/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
     result['.config/family-help/ssh.conf']=('\n'.join(lines).encode(),0o600,False)
     result['.config/family-help/known_hosts']=((host+' '+profile['host_key']+'\n').encode(),0o600,False)
@@ -437,7 +445,7 @@ def enrollment_bundle(profile,destination):
     if target==ROOT or ROOT in target.parents:raise ValueError('Enrollment bundles contain private household addresses: keep them outside the checkout')
     if target.exists():raise ValueError('Choose a new bundle directory; existing bundles are never overwritten')
     make_parents(target.parent,0o700);target.mkdir(mode=0o700)
-    for directory in ('assistance','setup','desktop'):shutil.copytree(ROOT/directory,target/directory,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
+    for directory in ('assistance','setup','desktop','parental','systemd','guardian'):shutil.copytree(ROOT/directory,target/directory,ignore=shutil.ignore_patterns('__pycache__','*.pyc'))
     shutil.copy2(ROOT/'master-installation.sh',target/'master-installation.sh')
     public=json.loads(json.dumps(profile));public['admin'].pop('identity_file',None)
     private_write(target/'enrollment.json',encoded(public))
@@ -482,12 +490,13 @@ def verify_viewer_policy():
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command',choices=('configure','plan','apply','bundle','verify'),nargs='?',default='plan')
+    parser.add_argument('command',choices=('configure','plan','apply','bundle','verify','controls'),nargs='?',default='plan')
     parser.add_argument('--role',choices=('helper','learner'),default='helper')
     parser.add_argument('--profile',default=str(pathlib.Path.home()/'.config/family-help/setup.json'))
     parser.add_argument('--out',help='New private directory outside the repository for bundle')
     parser.add_argument('--approval-only',action='store_true',help='Refuse any technical-role profile; use when a technical parent installs another parent’s data-only enrollment')
     parser.add_argument('--approval-transport-only',action='store_true',help='Enroll only the scoped approval endpoint on an existing learner setup, preserving technical keys and desktop configuration')
+    parser.add_argument('--enable-pam',action='store_true',help='Controls enrollment only: install login and normal-lock policy gates, without enabling enforcement')
     parser.add_argument('--activate',action='store_true',help='Start graphical services now; requires the intended desktop session')
     parser.add_argument('--adopt-existing',action='store_true',help='Explicitly replace reviewed existing managed files, preserving private backups')
     args=parser.parse_args();os.umask(0o077)
@@ -503,6 +512,15 @@ def main():
         private_write(pathlib.Path(args.profile),encoded(profile));print('Private profile saved:',args.profile);return
     profile=read_profile(args.profile)
     if args.approval_only and capability(profile)!='approver':raise ValueError('This command is restricted to an approval-only profile')
+    if args.command=='controls':
+        module=runpy.run_path(str(ROOT/'setup/policy_setup.py'))
+        if args.role=='helper':module['enroll_helper'](globals(),profile,args)
+        else:
+            local=public_key(pathlib.Path('/etc/ssh/ssh_host_ed25519_key.pub').read_text().strip())
+            if local!=public_key(profile.get('host_key','')) or fingerprint(local)!=profile.get('host_fingerprint'):raise ValueError('Enrollment profile belongs to a different learner host')
+            module['install'](globals(),profile,args)
+        return
+    if args.enable_pam:raise ValueError('--enable-pam is only for the controls enrollment command')
     if args.command=='plan':
         print('Read-only enrollment plan:')
         print(json.dumps({'learner':profile['learner'],'helper':selected_helper(profile),'other_parent':profile.get('other_parent',profile.get('mom',{'enabled':False}))},indent=2))

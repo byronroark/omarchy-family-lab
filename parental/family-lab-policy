@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import fcntl
 import grp
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,13 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
+# A sibling root-owned module is also loadable by isolated source-tree tests.
+import importlib.util
+_break_spec=importlib.util.spec_from_file_location('family_breaks',Path(__file__).with_name('family_breaks.py'))
+_break_module=importlib.util.module_from_spec(_break_spec);_break_spec.loader.exec_module(_break_module)
+_guard_spec=importlib.util.spec_from_file_location('family_guard',Path(__file__).with_name('family_guard.py'))
+_guard_module=importlib.util.module_from_spec(_guard_spec);_guard_spec.loader.exec_module(_guard_module)
+
 ETC = Path('/etc/family-lab')
 DATA = Path('/var/lib/family-lab')
 RUNTIME = Path('/run/family-lab')
@@ -27,6 +35,15 @@ SOCKET = RUNTIME / 'policy.sock'
 LEARNER_SOCKET = RUNTIME / 'learner.sock'
 MAX_BYTES = 131072
 DAYS = ('mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun')
+
+def guard_ready(etc=ETC):
+    path=etc/'guard-ready'
+    if not path.exists():return False
+    try:
+        marker=read(path)
+        paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
+        return set(marker)=={'boot','accepted','hashes'} and marker['hashes']=={name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in paths}
+    except (OSError,ValueError,TypeError):return False
 
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', value):
@@ -91,9 +108,10 @@ def validate(policy, enrolled, browsers=()):
     enabled_browsers = 0
     for peer, item in policy['subjects'].items():
         identifier(peer)
-        if not isinstance(item, dict) or set(item) != {'name', 'mode', 'daily_minutes', 'hours', 'grace_seconds', 'browser'}:
+        if not isinstance(item, dict) or not {'name','mode','daily_minutes','hours','grace_seconds','browser'}<=set(item) or set(item)-{'name','mode','daily_minutes','hours','grace_seconds','browser','breaks'}:
             raise ValueError('Unknown subject settings')
         label(item['name'])
+        if 'breaks' in item:_break_module.settings(item['breaks'])
         if item['mode'] not in ('off', 'monitor', 'enforce'):
             raise ValueError('Mode must be off, monitor or enforce')
         integer(item['grace_seconds'], 60, 600)
@@ -158,7 +176,7 @@ def next_allowed(policy, usage, peer, now):
         used = usage['days'].get(counter_day, {}).get(peer, 0)
         limit = item['daily_minutes'][DAYS[local.weekday()]]*60 + usage['grants'].get(counter_day+'/'+peer, 0)*60
         minutes = local.hour*60+local.minute
-        if used < limit and (bedtime_skipped(policy, usage, peer, candidate, forecast_boot, forecast_elapsed+candidate-now) or any(minute(a) <= minutes < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])):
+        if (item.get('breaks',{}).get('enabled') or used < limit) and (bedtime_skipped(policy, usage, peer, candidate, forecast_boot, forecast_elapsed+candidate-now) or any(minute(a) <= minutes < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])):
             return {'at': candidate, 'label': local.strftime('%a %Y-%m-%d %H:%M %Z'),
                     'timezone': policy['timezone']}
         candidate = (int(candidate)//60+1)*60
@@ -289,6 +307,16 @@ class Engine:
         usage_valid(self.state)
         self.state.setdefault('sites', {})
         self.finishes = FinishEpisodes(data / 'finish.json')
+        self.breaks = _break_module.Breaks(data/'breaks.json',read,atomic)
+        self.guards = _guard_module.Guards(self.config)
+        self.time_help=read(data/'time-help.json') if (data/'time-help.json').exists() else {}
+        if not isinstance(self.time_help,dict) or len(self.time_help)>32:raise ValueError('Invalid time-help queue')
+        for key,item in self.time_help.items():
+            if not re.fullmatch('[a-f0-9]{32}',key) or set(item)!={'id','peer','parent','created'} or item['id']!=key or item['peer'] not in self.config['subjects'] or type(item['parent']) is not int or item['parent']<=0 or type(item['created']) not in (int,float):raise ValueError('Invalid time-help request')
+        self.guard_trial=read(data/'guard-trial.json') if (data/'guard-trial.json').exists() else None
+        if self.guard_trial is not None:
+            trial=self.guard_trial
+            if not isinstance(trial,dict) or set(trial)!={'peer','boot','expires','deadline','prior','protected'} or trial['peer'] not in self.config['subjects'] or not isinstance(trial['boot'],str) or type(trial['expires']) not in (int,float) or type(trial['deadline']) not in (int,float):raise ValueError('Invalid guard trial state')
         self.last_tick = None
         self.boot = boot_id()
         self.status = {}
@@ -320,9 +348,18 @@ class Engine:
     def learner_request(self, uid, req):
         with self.lock:
             config = read(self.etc / 'enrollment.json')
+            guard_peer=config.get('guards',{}).get(str(uid))
+            if guard_peer is not None:return self.guard_request(guard_peer,req)
             peers = [peer for peer,row in config['subjects'].items() if row['uid'] == uid]
             if len(peers) != 1:
                 raise PermissionError('This account is not an enrolled learner')
+            if isinstance(req,dict) and req.get('op')=='break-request':
+                if set(req)!={'op','episode','revision','helper','change','minutes'}:raise ValueError('Unexpected break request fields')
+                parent=self.config.get('parent_helpers',{}).get(req['helper'])
+                if parent is None or str(parent) not in self.config['parents']:raise ValueError('This helper is not enrolled for break decisions')
+                if self.last_success is None or not 0<=boottime()-self.last_success<=20 or self.status_generation!=self.generation:raise ValueError('Policy status is stale; wait for refresh')
+                peer=peers[0];self.audit('learner','break-request',{'peer':peer,'helper':req['helper'],'change':req['change']})
+                return self.breaks.ask(peer,parent,req['episode'],req['revision'],req['change'],req['minutes'],time.time(),self.boot,boottime())
             if not isinstance(req, dict) or req.get('op') not in ('get','save','rest'):
                 raise ValueError('Unsupported learner action')
             expected = {'op'} if req['op'] == 'get' else {'op','episode'}
@@ -343,8 +380,47 @@ class Engine:
                 self.audit('learner:'+peer, 'dino-'+req['op'], {'episode':req['episode']})
                 state = self.finishes.action(peer, req['op'], req['episode'], now, self.boot, elapsed)
             row = self.status[peer]
-            return dict(state, next_allowed=row['next_allowed'],
+            return dict(state, next_allowed=row['next_allowed'],break_status=row.get('break'),helpers=row.get('helpers',[]),
+                        break_requests=[{'id':item['id'],'status':item['status']} for item in self.breaks.state['requests'].values() if item['peer']==peer][-8:],
                         note='Preparation only: does not change login permission, session grace or power state')
+
+    def ask_time_help(self,peer,helper):
+        parent=self.config.get('parent_helpers',{}).get(helper)
+        if parent is None or str(parent) not in self.config['parents']:raise ValueError('Parent is not enrolled')
+        now=time.time();queue={key:item for key,item in self.time_help.items() if 0<=now-item['created']<=900}
+        for item in queue.values():
+            if item['peer']==peer and item['parent']==parent and now-item['created']<30:return item
+        if len(queue)>=32:raise ValueError('Wait for a parent to review the current time requests')
+        identifier=uuid.uuid4().hex;item={'id':identifier,'peer':peer,'parent':parent,'created':now};queue[identifier]=item
+        self.audit('learner:'+peer,'time-help',{'helper':helper});atomic(self.data/'time-help.json',queue);self.time_help=queue;return item
+
+    def guard_request(self,peer,req):
+        if peer not in self.config['subjects'] or not isinstance(req,dict):raise PermissionError('Guard is not enrolled for this learner')
+        healthy=self.last_success is not None and 0<=boottime()-self.last_success<=20 and self.status_generation==self.generation
+        if not healthy:raise ValueError('Policy status is stale; keep the screen protected')
+        if req.get('op')=='guard-help' and set(req)=={'op','helper'}:return self.ask_time_help(peer,req['helper'])
+        if req.get('op')=='guard-release' and set(req)=={'op'}:
+            allowed=not self.status[peer]['blocked']
+            receipt=self.data/'guard-trial-result.json'
+            if allowed and receipt.exists():
+                result=read(receipt)
+                if result['peer']==peer and result['boot']==self.boot:
+                    result['release_checked']=True;atomic(receipt,result)
+            return {'allowed':allowed}
+        if req.get('op')=='guard-get' and set(req)=={'op'}:
+            state=self.breaks.view(peer,time.time(),self.boot,boottime());row=self.status[peer]
+            return dict(state,healthy=True,blocked=row['blocked'],reason=row['reason'],next_allowed=row['next_allowed'],helpers=sorted(self.config.get('parent_helpers',{})))
+        if req.get('op')=='guard-protected' and set(req)=={'op','episode'}:
+            result=self.breaks.protected(peer,req['episode'],time.time(),self.boot,boottime())
+            if self.guard_trial is not None and self.guard_trial['peer']==peer:
+                self.guard_trial['protected']=True;atomic(self.data/'guard-trial.json',self.guard_trial)
+            return result
+        if req.get('op')=='guard-ask' and set(req)=={'op','episode','revision','helper','change','minutes'}:
+            parent=self.config.get('parent_helpers',{}).get(req['helper'])
+            if parent is None or str(parent) not in self.config['parents']:raise ValueError('Parent is not enrolled')
+            self.audit('guard:'+peer,'break-request',{'helper':req['helper'],'change':req['change']})
+            return self.breaks.ask(peer,parent,req['episode'],req['revision'],req['change'],req['minutes'],time.time(),self.boot,boottime())
+        raise PermissionError('Guard may only read its status, acknowledge protection and request a parent decision')
 
     def request(self, uid, req):
         with self.lock:
@@ -352,12 +428,56 @@ class Engine:
             if not isinstance(req, dict):
                 raise ValueError('Expected operation object')
             op = req.get('op')
+            if op=='guard-active' and set(req)=={'op'}:
+                if uid!=0:raise PermissionError('Guard process inspection requires the local administrator')
+                return {'active':any(self.guards.covering(peer) for peer in self.guards.processes)}
+            if op=='accept-guard' and set(req)=={'op','peer'}:
+                if uid!=0:raise PermissionError('Guard acceptance requires the local administrator')
+                result=read(self.data/'guard-trial-result.json')
+                if result['peer']!=req['peer'] or result['boot']!=self.boot or not result['protected'] or not result['release_checked'] or not 0<=time.time()-result['time']<=3600 or not (self.etc/'pam-ready').exists():raise ValueError('Complete and verify a protected guard trial first')
+                paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
+                atomic(self.etc/'guard-ready',{'boot':self.boot,'accepted':time.time(),'hashes':{name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in paths}},0o644)
+                self.audit(who,op,{'peer':req['peer']})
+                return {'accepted':req['peer']}
+            if op=='guard-trial' and set(req)=={'op','peer','seconds'}:
+                if uid!=0:raise PermissionError('Only the local administrator can start a bounded guard trial')
+                peer=identifier(req['peer']);seconds=integer(req['seconds'],15,600)
+                if peer not in self.config['subjects'] or self.guard_trial is not None or self.current['policy']['subjects'][peer]['mode']!='off' or peer not in self.config.get('guards',{}).values():raise ValueError('Use a single enrolled, disabled learner policy for the trial')
+                now,elapsed=time.time(),boottime();maximum=seconds+120;state=copy.deepcopy(self.breaks.state);prior=copy.deepcopy(state['learners'].get(peer))
+                self.guard_trial={'peer':peer,'boot':self.boot,'expires':now+maximum,'deadline':elapsed+maximum,'prior':prior,'protected':False}
+                atomic(self.data/'guard-trial.json',self.guard_trial)
+                state['learners'][peer]={'used':3600,'rest':{'episode':uuid.uuid4().hex,'revision':0,'expires':now+seconds,'deadline':elapsed+seconds,'boot':self.boot,'protected':False,'seconds':seconds}}
+                self.breaks.commit(state);self.generation+=1
+                self.audit(who,op,{'peer':peer,'seconds':seconds})
+                return {'trial':peer,'maximum_seconds':maximum,'break_seconds':seconds}
+            if op=='break-adjust' and set(req)=={'op','peer','episode','revision','change','minutes'}:
+                if uid==0:raise ValueError('Use the enrolled parent endpoint for a break adjustment')
+                peer=identifier(req['peer'])
+                if peer not in self.config['subjects']:raise ValueError('Unknown learner')
+                item=self.breaks.ask(peer,uid,req['episode'],req['revision'],req['change'],req['minutes'],time.time(),self.boot,boottime())
+                self.audit(who,op,{'peer':peer,'change':req['change'],'minutes':req['minutes']})
+                result=self.breaks.decide(uid,item['id'],'approve',time.time(),self.boot,boottime());self.generation+=1
+                return result
+            if op=='break-pending' and set(req)=={'op'}:
+                return {'requests':self.breaks.pending(uid),'help_requests':[item for item in self.time_help.values() if item['parent']==uid and 0<=time.time()-item['created']<=900]}
+            if op=='break-status' and set(req)=={'op','id'}:
+                item=self.breaks.state['requests'].get(req['id'])
+                if not item or item['parent']!=uid:raise PermissionError('Break request belongs to another parent')
+                return {'id':item['id'],'status':item['status']}
+            if op=='break-decision' and set(req)=={'op','id','decision'}:
+                self.audit(who,op,{'id':req['id'],'decision':req['decision']})
+                result=self.breaks.decide(uid,req['id'],req['decision'],time.time(),self.boot,boottime());self.generation+=1
+                return result
+            if op=='break-protected' and set(req)=={'op','peer','episode'}:
+                if uid!=0:raise PermissionError('Only the trusted guard supervisor can acknowledge protection')
+                return self.breaks.protected(req['peer'],req['episode'],time.time(),self.boot,boottime())
             if op == 'get' and set(req) == {'op'}:
                 return {'revision': self.current['revision'], 'policy': self.current['policy'], 'status': self.status,
+                        'capabilities':{'protected_break_guard':guard_ready(self.etc)},
                         'browser_error': self.browser_error, 'healthy': self.last_success is not None and boottime()-self.last_success <= 20}
             if op == 'summary' and set(req) == {'op'}:
                 self.audit(who, 'summary', {})
-                return {'coverage': 'Logged-in time while awake; not foreground applications, attention or website visits',
+                return {'coverage': 'Logged-in time while awake, excluding protected Dino breaks; not foreground applications, attention or website visits',
                         'days': self.state['days'], 'status': self.status, 'timezone': self.current['policy']['timezone']}
             if op == 'history' and set(req) == {'op'}:
                 path = self.data / 'audit.jsonl'
@@ -370,6 +490,8 @@ class Engine:
                 if candidate is None:
                     raise ValueError('No previous policy to restore')
                 candidate = copy.deepcopy(validate(candidate, self.config['subjects'], self.config['browsers']))
+                if any(item['mode']=='enforce' and self.config.get('time_models',{}).get(peer)=='protected-breaks' and not item.get('breaks',{}).get('enabled') for peer,item in candidate['subjects'].items()):raise ValueError('This learner uses protected breaks; logout-based enforcement is disabled')
+                if any(s['mode']=='enforce' and s.get('breaks',{}).get('enabled') for s in candidate['subjects'].values()) and not guard_ready(self.etc):raise ValueError('Protected Dino guard must pass live acceptance before break enforcement')
                 if any(s['mode'] == 'enforce' for s in candidate['subjects'].values()):
                     pam = self.etc / 'pam-ready'
                     if not pam.exists():
@@ -456,12 +578,14 @@ class Engine:
             counter_day = max(today, prior_days[-1]) if prior_days else today
             delta = 0 if self.last_tick is None else max(0, min(10, monotonic-self.last_tick))
             self.last_tick = monotonic
+            break_policies={peer:dict(item['breaks'],enabled=item['breaks']['enabled'] and item['mode']!='off') for peer,item in self.current['policy']['subjects'].items() if 'breaks' in item}
+            break_status=self.breaks.tick(break_policies,{peer for peer,row in self.config['subjects'].items() if row['uid'] in active and not self.guards.covering(peer)},delta,now,self.boot,elapsed)
             result = {}
             for peer, enrollment in self.config['subjects'].items():
                 item = self.current['policy']['subjects'][peer]
                 day = self.state['days'].setdefault(counter_day, {})
                 used = day.get(peer, 0)
-                if item['mode'] != 'off' and enrollment['uid'] in active:
+                if item['mode'] != 'off' and enrollment['uid'] in active and not self.guards.covering(peer) and break_status.get(peer,{}).get('phase')!='break':
                     used += delta
                     day[peer] = used
                 allowance = item['daily_minutes'][DAYS[local.weekday()]]*60 + self.state['grants'].get(counter_day+'/'+peer, 0)*60
@@ -469,7 +593,9 @@ class Engine:
                 skip_bedtime = bedtime_skipped(self.current['policy'], self.state, peer, now, self.boot, elapsed)
                 in_hours = skip_bedtime or any(minute(a) <= mins < minute(b) for a,b in item['hours'][DAYS[local.weekday()]])
                 paused = alive(self.state['pauses'].get(peer), now, self.boot, elapsed)
-                reason = 'outside-hours' if not in_hours else 'daily-limit' if used >= allowance else ''
+                has_breaks=item.get('breaks',{}).get('enabled',False)
+                break_row=break_status.get(peer)
+                reason = 'outside-hours' if not in_hours else 'break' if break_row and break_row['phase']!='use' else 'daily-limit' if not has_breaks and used >= allowance else ''
                 blocked = item['mode'] == 'enforce' and bool(reason) and not paused
                 grace_left = None
                 if blocked:
@@ -480,12 +606,26 @@ class Engine:
                 else:
                     self.state['blocked_since'].pop(peer, None)
                 result[peer] = {'name': item['name'], 'uid': enrollment['uid'], 'mode': item['mode'],
-                    'day': counter_day, 'used_seconds': round(used), 'remaining_seconds': max(0, round(allowance-used)),
+                    'day': counter_day, 'used_seconds': round(used), 'remaining_seconds': max(0,round(item['breaks']['use_minutes']*60-(break_row['used_seconds'] if break_row else 0))) if has_breaks else max(0,round(allowance-used)),
+                    'guard_covering':self.guards.covering(peer),
                     'would_block': bool(reason), 'reason': reason, 'blocked': blocked,
                     'grace_seconds': None if grace_left is None else round(grace_left), 'paused': paused,
                     'bedtime_skipped_today': skip_bedtime,
                     'logged_in': enrollment['uid'] in active,
-                    'next_allowed': next_allowed(self.current['policy'], self.state, peer, now) if blocked else None}
+                    'next_allowed': next_allowed(self.current['policy'], self.state, peer, now) if blocked and reason!='break' else None,
+                    'break':break_row, 'helpers':sorted(self.config.get('parent_helpers',{}))}
+            if self.guard_trial is not None:
+                trial=self.guard_trial;peer=trial['peer'];view=self.breaks.view(peer,now,self.boot,elapsed)
+                expired=trial['boot']!=self.boot or now>=trial['expires'] or elapsed>=trial['deadline'] or view['episode'] is None or (view['phase']=='break' and view['remaining_seconds']==0)
+                if expired:
+                    state=copy.deepcopy(self.breaks.state)
+                    if trial['prior'] is None:state['learners'][peer]={'used':0,'rest':None}
+                    else:state['learners'][peer]=trial['prior']
+                    for item in state['requests'].values():
+                        if item['peer']==peer and item['status']=='pending':item['status']='expired'
+                    self.breaks.commit(state);atomic(self.data/'guard-trial-result.json',{'peer':peer,'boot':self.boot,'time':now,'protected':trial['protected'],'release_checked':False});atomic(self.data/'guard-trial.json',None);self.guard_trial=None
+                    self.audit('service','guard-trial-ended',{'peer':peer})
+                else:result[peer].update(mode='enforce',blocked=True,reason='break',break_status=view,guard_test=True,**{'break':view})
             self.finishes.sync({peer for peer,row in result.items() if row['blocked']}, now, self.boot, elapsed)
             # Retain 30 daily totals; detailed browsing/application data is never collected here.
             for old in sorted(self.state['days'])[:-30]:
@@ -498,7 +638,7 @@ class Engine:
             atomic(self.runtime / 'status.json', {'updated': now, 'boot': self.boot, 'elapsed': elapsed,
                 'revision': self.current['revision'], 'subjects': result, 'browser_error': self.browser_error}, 0o644)
             # Persistent minimal gate protects enforced accounts during daemon failure/reboot.
-            atomic(self.etc / 'gate.json', {'subjects': {str(e['uid']): self.current['policy']['subjects'][p]['mode'] == 'enforce'
+            atomic(self.etc / 'gate.json', {'subjects': {str(e['uid']): (self.current['policy']['subjects'][p]['mode'] == 'enforce' or (self.guard_trial is not None and self.guard_trial['peer']==p))
                                                         for p,e in self.config['subjects'].items()}}, 0o644)
             self.last_success = boottime()
             return result
@@ -508,7 +648,10 @@ class Engine:
             # A grant/policy change acknowledged after this tick invalidates its kill decision.
             if status is not self.status or self.status_generation != self.generation:
                 return
+            self.guards.sync(status)
             for peer, state in status.items():
+                # Break policies must never fall through to the legacy logout path.
+                if self.config.get('time_models',{}).get(peer)=='protected-breaks' or self.current['policy']['subjects'][peer].get('breaks',{}).get('enabled'):continue
                 if state['mode'] == 'enforce' and state['blocked'] and state['grace_seconds'] == 0 and state['logged_in'] and time.monotonic()-self.last_terminated.get(peer, -1000) > 10:
                     self.audit('service', 'terminate', {'peer': peer, 'reason': state['reason']})
                     uid = integer(self.config['subjects'][peer]['uid'], 1000, 2**31-1)
@@ -658,6 +801,7 @@ def client(req, path=SOCKET):
     return response['result']
 
 def remote():
+    if os.environ.get('SSH_ORIGINAL_COMMAND') or os.isatty(0):raise ValueError('Only the enrolled policy JSON protocol is accepted')
     # Forced-command account identity comes from SO_PEERCRED, never the payload or remote command.
     deadline=time.monotonic()+5; raw=b''
     while True:
@@ -705,12 +849,20 @@ def recover(etc=ETC, data=DATA, runtime=RUNTIME):
 def main(args):
     if args == ['daemon']:
         daemon()
-    elif args == ['login-check']:
+    elif args == ['login-check'] or args == ['unlock-check']:
         # Missing enrollment permits ordinary systems; corrupt/stale enrolled gate fails closed.
         if not (ETC/'gate.json').exists():
             return
         user = os.environ.get('PAM_USER', '')
-        if not user or not login_allowed(user):
+        allowed=bool(user) and login_allowed(user)
+        if not allowed and user and (args==['unlock-check'] or os.environ.get('PAM_SERVICE') in ('omarchy-lock-password','omarchy-lock-fingerprint')):
+            # A normal account lock may already own the compositor lock. Allow
+            # its real authentication only while the new guard is still pending;
+            # the break clock has not started and the guard will take over next.
+            status=read(RUNTIME/'status.json');uid=pwd.getpwnam(user).pw_uid
+            fresh=status['boot']==boot_id() and 0<=boottime()-status['elapsed']<=20
+            allowed=fresh and any(row['uid']==uid and row['reason']=='break' and row.get('break',{}).get('phase')=='due' for row in status['subjects'].values())
+        if not allowed:
             raise PermissionError('Family Lab: time unavailable; ask an enrolled parent')
     elif args == ['recover'] and os.geteuid() == 0:
         recover()
@@ -735,8 +887,10 @@ def main(args):
                         seen.discard(key)
                     if remaining is not None and remaining<=threshold and key not in seen:
                         seen.add(key)
-                        text=('Save your work. Session ends in about '+str(remaining)+' seconds.' if row['blocked'] else
-                              'About '+str(remaining//60)+' minutes of today’s allowance remain.')
+                        if row.get('break') is not None:
+                            text=('Your protected Dino break is starting. Your work stays open.' if row['blocked'] else 'About '+str(remaining//60)+' minutes until your next break. Your work will stay open.')
+                        else:
+                            text=('Save your work. Session ends in about '+str(remaining)+' seconds.' if row['blocked'] else 'About '+str(remaining//60)+' minutes of today’s allowance remain.')
                         if row['mode']=='monitor':
                             text+=' Monitoring only; restrictions are not enforced.'
                         subprocess.run(['omarchy-notification-send','--app-name','Family Lab','Family Lab time',text],check=True,timeout=5)
@@ -748,6 +902,16 @@ def main(args):
         print(json.dumps(client({'op':'get'}, LEARNER_SOCKET), indent=2))
     elif len(args) == 3 and args[0] == 'learner' and args[1] in ('save','rest'):
         print(json.dumps(client({'op':args[1], 'episode':args[2]}, LEARNER_SOCKET), indent=2))
+    elif len(args)==3 and args[:2]==['guard','help']:
+        print(json.dumps(client({'op':'guard-help','helper':args[2]},LEARNER_SOCKET)))
+    elif args==['guard','release']:
+        print(json.dumps(client({'op':'guard-release'},LEARNER_SOCKET)))
+    elif args==['guard','get']:
+        print(json.dumps(client({'op':'guard-get'},LEARNER_SOCKET)))
+    elif len(args)==3 and args[:2]==['guard','protected']:
+        print(json.dumps(client({'op':'guard-protected','episode':args[2]},LEARNER_SOCKET)))
+    elif len(args)==7 and args[:2]==['guard','ask']:
+        print(json.dumps(client({'op':'guard-ask','helper':args[2],'change':args[3],'minutes':int(args[4]),'episode':args[5],'revision':int(args[6])},LEARNER_SOCKET)))
     elif args == ['status']:
         print(json.dumps(read(RUNTIME/'status.json'), indent=2, ensure_ascii=False))
     elif args and args[0] == 'local' and os.geteuid() == 0:

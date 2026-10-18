@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Family Lab \u2014 Google SafeSearch shortcut",
+  "version": "1.0.0",
+  "description": "Open Google SafeSearch settings when navigating to the bare Google homepage. Search results are unchanged.",
+  "permissions": [
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "*://google.com/*",
+    "*://www.google.com/*"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "homepage",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
+}

@@ -10,6 +10,9 @@ def ssh(role):
     return ['/usr/bin/ssh','-F',cfg['ssh_config'],'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',
             '-o','ConnectTimeout=4','-o','ConnectionAttempts=1',cfg[role]]
 def validate(data):
+    if isinstance(data,dict) and ('break_request' in data or 'policy_help' in data):
+        from family_policy_client import validate_card
+        return validate_card(data)
     if isinstance(data,dict) and 'software' in data:
         from family_software import validate_request
         return validate_request(data)
@@ -39,6 +42,15 @@ def screenshot(data):
     if (actual['width'],actual['height'])!=(meta['width'],meta['height']):raise ValueError('Screenshot dimensions do not match')
     temp=folder/(data['id']+'.tmp');temp.write_bytes(clean);temp.replace(path);prune(folder)
 def poll():
+    if cfg.get('policy_alias'):
+        from family_policy_client import pending_cards
+        try:
+            handled_path=state/'policy-handled.json'
+            handled=set(json.loads(handled_path.read_text())) if handled_path.exists() else set()
+            for card in pending_cards(cfg):
+                if card['id'] not in handled:return card
+        except (ValueError,OSError,subprocess.SubprocessError) as exc:
+            print('Break requests unavailable: '+str(exc),file=sys.stderr,flush=True)
     if cfg.get('capability','technical')=='approver':
         from family_approval_client import rpc
         return rpc(cfg,{'op':'poll'})['request']
@@ -113,9 +125,15 @@ elif len(sys.argv)>1 and sys.argv[1]=='panel':
         elif choice in ('approve','deny') and 'software' in data:
             if cfg.get('capability','technical')=='approver' or cfg.get('quick_approval') is True:raise ValueError('Delegated decisions must use the reviewed approval card')
             software_terminal(data,choice)
+        elif choice=='time-controls' and cfg.get('policy_alias'):
+            subprocess.Popen(['/usr/bin/python3',str(pathlib.Path(__file__).resolve().with_name('family-time-widget'))],start_new_session=True)
         elif choice=='admin': launch('admin')
         elif choice=='watch': launch('view_alias')
         elif choice=='help': launch('control_alias')
+        if 'break_request' in data or 'policy_help' in data:
+            path=state/'policy-handled.json';values=json.loads(path.read_text()) if path.exists() else []
+            values=[value for value in values if value!=data['id']]+[data['id']]
+            temporary=path.with_suffix('.tmp');temporary.write_text(json.dumps(values[-128:]));temporary.replace(path)
         (state/'handled').write_text(data['id'])
 elif len(sys.argv)>1 and sys.argv[1]=='open':
     # Backward compatibility for old native notification actions.

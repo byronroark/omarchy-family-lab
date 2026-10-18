@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "redirect",
+      "redirect": {
+        "url": "https://www.google.com/safesearch"
+      }
+    },
+    "condition": {
+      "regexFilter": "^https?://(www[.])?google[.]com/$",
+      "resourceTypes": [
+        "main_frame"
+      ]
+    }
+  }
+]
