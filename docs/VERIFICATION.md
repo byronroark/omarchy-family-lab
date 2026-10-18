@@ -47,3 +47,7 @@ Record sanitized pass/fail/version results, never hostnames, usernames, fingerpr
 - [Desktop notifications specification](https://specifications.freedesktop.org/notification/latest-single/): action support varies by server; the prototype uses a native Omarchy-specific adapter.
 
 The repository now packages an experimental plugin with an inspected API baseline. This is not a general compatibility certification or official Omarchy endorsement; additional releases and end-to-end deployments require their own acceptance tests.
+
+## Protected breaks live acceptance — 2026-10-18
+
+An existing enrolled household passed the work-preserving Dino lock and return-to-work check. The learner requested a skip through the protected screen: parent denial retained protection, a fresh request approved through the parent card allowed release, and open work remained intact. The separate administrator remained permitted while the learner login gate denied access. Scoped extend/shorten and bedtime skip/restore were tested. The policy service reported healthy after enabling 60/15 breaks and reviewed allowed hours. No learner sudo grant, logout or reboot was used. Private sampled time report generation passed. This does not certify a clean enrollment, second-parent rollout, actual overnight transition or reboot under enforcement; those remain separate checks.
