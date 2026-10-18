@@ -92,7 +92,7 @@ elif len(sys.argv)>1 and sys.argv[1]=='panel':
         try: fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError: sys.exit(0)
         try:
-            if cfg.get('capability','technical')=='approver' and 'software' in data:
+            if (cfg.get('capability','technical')=='approver' or cfg.get('quick_approval') is True) and 'software' in data:
                 from family_approval_client import rpc
                 review=rpc(cfg,{'op':'prepare','request':data})
                 folder=state/'reviews';folder.mkdir(mode=0o700,exist_ok=True)
@@ -100,13 +100,18 @@ elif len(sys.argv)>1 and sys.argv[1]=='panel':
             elif cfg.get('capability','technical')=='technical':screenshot(data)
         except (OSError,ValueError,subprocess.SubprocessError) as exc:
             if cfg.get('capability','technical')=='approver':raise ValueError('Approval review unavailable: '+str(exc)) from exc
-            print('Screenshot unavailable: '+str(exc),file=sys.stderr,flush=True)
+            if cfg.get('quick_approval') is True and 'software' in data:
+                folder=state/'reviews';folder.mkdir(mode=0o700,exist_ok=True)
+                (folder/(data['id']+'.json')).write_text(json.dumps({'unavailable':True,'id':data['id']}))
+            print('Review or screenshot unavailable: '+str(exc),file=sys.stderr,flush=True)
         result=subprocess.run(['/usr/bin/python3',str(pathlib.Path(__file__).resolve().with_name('family-help-widget')),'helper',data['id']],capture_output=True,text=True)
         if result.returncode:raise ValueError('Help panel failed: '+result.stderr[-1000:])
         choice=result.stdout.strip()
         load_request(data['id'])
-        if choice in ('approve','deny') and 'software' in data:
-            if cfg.get('capability','technical')=='approver':raise ValueError('Delegated decisions must use the reviewed approval card')
+        if choice=='admin-review' and 'software' in data:
+            software_terminal(data,'approve')
+        elif choice in ('approve','deny') and 'software' in data:
+            if cfg.get('capability','technical')=='approver' or cfg.get('quick_approval') is True:raise ValueError('Delegated decisions must use the reviewed approval card')
             software_terminal(data,choice)
         elif choice=='admin': launch('admin')
         elif choice=='watch': launch('view_alias')

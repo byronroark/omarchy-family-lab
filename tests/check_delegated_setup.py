@@ -5,8 +5,11 @@ from check_enrollment import profile,key,m as enroll
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('approval_setup_test',ROOT/'setup/approval_setup.py');setup=importlib.util.module_from_spec(spec);spec.loader.exec_module(setup)
 class Enrollment(unittest.TestCase):
-    def test_add_parent_preserves_existing_technical_configuration(self):
+    def test_add_parent_preserves_existing_technical_configuration(self,technical=False):
         p=profile();p.pop('dad');p.pop('mom');p['admin'].pop('identity_file');p['helper']={'id':'mom','kind':'mom','label':'Mom','login':'helper','host':'192.0.2.20','capability':'approver'};p['approval_scope']={'menus':[],'packages':['extra/jq']};p['public_keys']={'approval':key(9)}
+        if technical:
+            p['helper'].update(capability='technical',quick_approval=True);p['admin']['identity_file']='/not-used/admin'
+            p['public_keys'].update({role:key(i) for i,role in enumerate(('poll','view','control'),1)})
         accounts={name:types.SimpleNamespace(pw_name=name,pw_uid=uid,pw_gid=uid,pw_dir=home) for name,uid,home in [('learner',1000,'/home/learner'),('parent',1001,'/home/parent'),('familyviewer',960,'/var/lib/family-help-viewer'),('familyap-mom',959,'/var/lib/family-approvers/mom')]}
         commands=[];writes=[];sudo_checked=[];policy_checked=[]
         class Tx:
@@ -31,6 +34,8 @@ class Enrollment(unittest.TestCase):
         self.assertFalse(any(name.endswith(('child.json','teaching.json','family-help-child')) or '/home/' in name or 'sudoers' in name for name in writes))
         self.assertFalse(any(command[0].endswith(('usermod','pacman','reboot')) for command in commands))
         self.assertIn(['/usr/bin/systemctl','enable','--now','family-help-approval.socket'],commands)
+    def test_add_technical_quick_approval_preserves_existing_configuration(self):
+        self.test_add_parent_preserves_existing_technical_configuration(technical=True)
     def test_effective_policy_must_match(self):
         api={'run':lambda *args,**kwargs:types.SimpleNamespace(stdout='forcecommand none\npermittty yes\n')}
         with self.assertRaises(ValueError):setup.verify_policy(api,'familyap-mom','mom')

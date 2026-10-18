@@ -3,7 +3,7 @@ import json,os,select,subprocess,time
 from family_approval import MAX_WIRE
 
 def rpc(config,operation):
-    if config.get('capability','technical')!='approver':raise ValueError('This profile is not approval-only')
+    if not (config.get('capability','technical')=='approver' or (config.get('capability','technical')=='technical' and config.get('quick_approval') is True)):raise ValueError('Scoped approval access is not enrolled')
     command=['/usr/bin/ssh','-F',config['ssh_config'],'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ConnectionAttempts=1','-T',config['approval_alias']]
     wire=json.dumps(operation,separators=(',',':'),ensure_ascii=True).encode()+b'\n'
     if len(wire)>MAX_WIRE:raise ValueError('Approval request is too large')

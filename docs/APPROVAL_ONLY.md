@@ -8,7 +8,7 @@ A parent can be the technical helper or an approval-only parent, independently o
 
 The existing style of persistent request card shows the child’s message and a root-reviewed app plan. The parent can choose **Approve installation**, **Deny request**, or **Dismiss**. A scrollable list includes exact repository/package versions and resolved dependencies. The parent gets queued/running/completed/failed status in the same window, and the child’s existing request view receives the result. Closing the parent window does not cancel an accepted job.
 
-Unsupported actions show **Technical helper needed** with Deny/Dismiss; they have no approve button and cannot be approved by calling the backend directly. Ordinary learning/admin help also offers no technical-session buttons on this account. The technical helper continues receiving the original requests independently, using their existing path.
+Unsupported actions show **Technical helper needed** with Deny/Dismiss; they have no approve button and cannot be approved by calling the backend directly. Ordinary learning/admin help also offers no technical-session buttons on this account. The technical helper continues receiving the original requests independently and receive the same quick approval path on new enrollment while retaining private administrator review.
 
 This first release delegates reviewed **app installation** only:
 
@@ -17,6 +17,23 @@ This first release delegates reviewed **app installation** only:
 - No arbitrary commands, shell flags, local package files, AUR builds, full Omarchy updates/migrations, default agents, controller/input-group changes, root demonstrations or shared-terminal typing.
 
 New enrollment defaults to the reviewed app menu set; the administrator must inspect and can narrow that scope before installation. Repository package requests outside the explicit allowlist need the technical helper. The updater remains on the existing private administrator path until a separately reviewed noninteractive updater is implemented. This is not automatic approval of every sudo prompt.
+
+## Quick approvals for technical Mom or Dad
+
+New technical and approval-only parents receive the same **Approve installation / Deny request** card without administrator authentication for each scoped app request. Technical parents additionally get **Review in admin terminal** for hands-on review. Their ordinary help requests keep Watch only, Help together and Admin demonstration; approval-only parents do not receive those tools. Unsupported actions, updates and default agents need the private administrator path; quick approval never expands its scope automatically. If the worker cannot prepare a review, the technical card explicitly offers admin review instead of silently approving or changing credentials.
+
+Every new enrollment includes scoped approve/deny access automatically and requests a stable parent ID and the reviewed app scope. The technical/approver choice controls additional help and admin tools, not access to the approval cards. The technical role still requires the encrypted administrator identity. An independent fourth role key is generated for the restricted approval transport; the existing poll/view/control keys and separate admin alias remain. Existing profiles without `helper.quick_approval` keep their original behavior.
+
+To add this to an existing **master-script-managed** technical enrollment, retain its private profile, learner ID, administrator identity, helper role and existing keys. Set `helper.quick_approval` to `true`, add a stable `helper.id`, and review an `approval_scope` containing `packages` and `menus` (the same format as approval-only enrollment). Run helper `plan`, `apply` and `bundle` to generate the additional key and updated card. Copy only the exported enrollment JSON to a private administrator-owned location on the child. From independently trusted installer source, add just the endpoint:
+
+```sh
+sudo ./master-installation.sh apply --role learner --approval-transport-only --profile "$HOME/.local/state/family-help/technical-approval-enrollment.json"
+sudo ./master-installation.sh verify --role learner --profile "$HOME/.local/state/family-help/technical-approval-enrollment.json"
+```
+
+This endpoint-only mode preserves learner help keys, menus, viewer and desktop files. Fresh technical learner enrollment installs both phases automatically. The full learner and approval endpoint phases have separate transactions: if the second phase fails, the first may already be installed. Preserve recovery access and rerun deliberately. An older manually deployed household setup needs configuration/key reconciliation first; do not overwrite its profile or regenerate its existing keys blindly. Neither changing `helper.quick_approval` to `false` nor deleting a local alias revokes the remote key: follow the registry/key revocation steps below.
+
+When multiple parents see the same request, only the first accepted decision can run. This applies across quick approval and the existing administrator review path. Quick and administrator review share the action lock and one-shot receipts.
 
 ## Trust and execution boundary
 

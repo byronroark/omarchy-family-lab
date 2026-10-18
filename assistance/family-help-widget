@@ -184,7 +184,7 @@ class HelpApp(Gtk.Application):
         self.label('Help requested: '+label,'prompt')
         self.label({'help':'Help me','watch':'Watch me','admin':'Admin task'}.get(data.get('topic'),'Help me'),'muted')
         self.label(data['message'])
-        if IDENTITY_CONFIG.get('capability','technical')=='approver':
+        if IDENTITY_CONFIG.get('capability','technical')=='approver' or (IDENTITY_CONFIG.get('quick_approval') is True and 'software' in data):
             return self.build_approver(data)
         if 'software' in data:
             from family_software import validate_request
@@ -224,6 +224,11 @@ class HelpApp(Gtk.Application):
             self.button('Dismiss',lambda:self.choose('dismiss'),self.row());return
         path=pathlib.Path.home()/'.local/state/family-help/reviews'/(data['id']+'.json')
         self.review=json.loads(bounded_file(path,65536))
+        technical=IDENTITY_CONFIG.get('capability','technical')=='technical'
+        if self.review.get('unavailable') and technical:
+            self.label('Quick approval is unavailable. Open your administrator terminal to review this request privately.','muted')
+            self.button('Review in admin terminal',lambda:self.choose('admin-review'),self.row())
+            self.button('Dismiss',lambda:self.choose('dismiss'),self.row());return
         if self.review.get('already_decided') and self.review.get('id')==data['id']:
             self.approval_id=data['id'];return self.build_approval_status('Status: '+self.review['status'])
         if self.review.get('id')!=data['id'] or self.review.get('expires',0)<=time.time():raise ValueError('Approval review expired; reopen the request')
@@ -240,6 +245,7 @@ class HelpApp(Gtk.Application):
         self.approval_feedback=self.label('','status');row=self.row();self.approval_buttons=[]
         if plan.get('supported'):self.approval_buttons.append(self.button('Approve installation',lambda:self.choose('approve'),row,'primary'))
         self.approval_buttons.append(self.button('Deny request',lambda:self.choose('deny'),row,'danger'))
+        if technical:self.approval_buttons.append(self.button('Review in admin terminal',lambda:self.choose('admin-review'),self.row()))
         self.button('Dismiss',lambda:self.choose('dismiss'),row)
     def build_approval_status(self,status):
         child=self.box.get_first_child()
@@ -262,7 +268,7 @@ class HelpApp(Gtk.Application):
         self.background(lambda:rpc(IDENTITY_CONFIG,{'op':'status','id':self.approval_id}),done)
         return True
     def choose(self,action):
-        if IDENTITY_CONFIG.get('capability','technical')=='approver' and action in ('approve','deny'):
+        if (IDENTITY_CONFIG.get('capability','technical')=='approver' or IDENTITY_CONFIG.get('quick_approval') is True) and action in ('approve','deny'):
             if self.busy:return
             from family_approval_client import decision
             self.busy=True

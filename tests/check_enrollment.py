@@ -17,6 +17,39 @@ class Enrollment(unittest.TestCase):
         p=profile();p['public_keys']['view']='command="shell" '+key(1);cases.append(p)
         for p in cases:
             with self.assertRaises((ValueError,KeyError)):m.validate(p)
+    def test_technical_quick_approval_has_separate_transport(self):
+        p=profile();p.pop('dad');p.pop('mom')
+        p['helper']={'kind':'mom','label':'Mom','login':'helper','host':'192.0.2.20','capability':'technical','id':'mom','quick_approval':True}
+        p['approval_scope']={'packages':['extra/jq'],'menus':[]};p['public_keys']['approval']=key(9);m.validate(p)
+        self.assertEqual(m.expected_keys(p),{'poll','view','control','approval'})
+        files=m.helper_files(p,pathlib.Path('/home/helper'),pathlib.Path('/home/helper/admin'),pathlib.Path('/home/helper/roles'))
+        cfg=json.loads(files['.config/family-help/helper.json'][0]);ssh=files['.config/family-help/ssh.conf'][0].decode()
+        self.assertTrue(cfg['quick_approval']);self.assertEqual(cfg['capability'],'technical')
+        self.assertEqual(ssh.count('Host '),5);self.assertIn('admin_alias',cfg)
+        approval=ssh.split('Host '+cfg['approval_alias']+'\n')[1].split('Host ')[0]
+        self.assertIn('User familyap-mom',approval);self.assertIn('help-approval-ed25519',approval)
+        self.assertIn('IdentityAgent none',approval);self.assertIn('RequestTTY no',approval);self.assertIn('BatchMode yes',approval)
+        self.assertNotIn('/home/helper/admin',approval)
+        for change in ({'quick_approval':'yes'},{'id':'x'*21},{'quick_approval':False}):
+            bad=copy.deepcopy(p);bad['helper'].update(change)
+            with self.assertRaises(ValueError):m.validate(bad)
+    def test_endpoint_only_dispatch_preserves_technical_deployment(self):
+        p=profile();p.pop('dad');p.pop('mom')
+        p['helper']={'kind':'dad','label':'Dad','login':'helper','host':'192.0.2.20','capability':'technical','id':'dad','quick_approval':True}
+        p['approval_scope']={'packages':[],'menus':[]};p['public_keys']['approval']=key(9)
+        for endpoint_only in (True,False):
+            argv=['master','apply','--role','learner','--profile','/private/enrollment.json']+(['--approval-transport-only'] if endpoint_only else [])
+            with self.subTest(endpoint_only=endpoint_only),patch.object(m.sys,'argv',argv),patch.object(m,'read_profile',return_value=p),patch.object(m.pathlib.Path,'read_text',return_value=key(4)),patch.object(m,'apply_learner') as base,patch.object(m.runpy,'run_path',return_value={'install':lambda api,profile,args:None}) as transport:
+                m.main()
+                self.assertEqual(base.call_count,0 if endpoint_only else 1);transport.assert_called_once()
+    def test_new_technical_enrollment_includes_quick_approval_by_default(self):
+        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','','SHA256:'+('A'*43)])
+        prompts=[]
+        def answer(prompt):prompts.append(prompt);return next(answers)
+        with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=m.prompt_profile()
+        self.assertFalse(any('enable one-click' in prompt for prompt in prompts))
+        self.assertTrue(p['helper']['quick_approval']);self.assertEqual(p['helper']['id'],'mom')
+        self.assertIn('identity_file',p['admin']);self.assertTrue(p['approval_scope']['menus'])
     def test_mom_can_be_the_only_helper(self):
         p=profile();old=p.pop('dad');p.pop('mom');p['helper']=dict(old,kind='mom',label='Mom');p['other_parent']={'enabled':False}
         m.validate(p)
@@ -30,7 +63,7 @@ class Enrollment(unittest.TestCase):
         self.assertNotIn('.config/family-help/dad.json',helper)
         self.assertEqual(json.loads(files['/etc/family-help/teaching.json'][0])['admin'],'parent')
     def test_interactive_mom_profile_needs_no_dad(self):
-        answers=iter(['mom','','technical','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','',m.fingerprint(key(4))])
+        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','',m.fingerprint(key(4))])
         prompts=[]
         def answer(prompt):prompts.append(prompt);return next(answers)
         with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=m.prompt_profile()

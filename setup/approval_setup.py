@@ -1,4 +1,4 @@
-"""Additional approval-only parent enrollment; never replaces technical help keys."""
+"""Scoped approval transport enrollment; never replaces technical help keys."""
 import grp,json,os,pathlib,pwd,subprocess
 GROUP='family-help-approvers'
 SOCKET=b'''[Unit]
@@ -80,7 +80,7 @@ def install(api,profile,args):
     for name in ('family_software.py','family_menu.py'):
         installed=pathlib.Path('/usr/local/libexec')/name;api['trusted_system_file'](installed)
         if installed.read_bytes()!=(api['ROOT']/'assistance'/name).read_bytes():raise ValueError('Installed assistance API differs; technical helper must reconcile it before approval-only enrollment')
-    if set(profile.get('public_keys',{}))!={'approval'}:raise ValueError('Use the approval-only helper bundle; no administrator/view/control keys belong here')
+    if not api['delegated'](profile) or set(profile.get('public_keys',{}))!=api['expected_keys'](profile):raise ValueError('Use a complete helper bundle with explicitly scoped approval access')
     try:grp.getgrnam(GROUP)
     except KeyError:api['run'](['/usr/bin/groupadd','--system',GROUP])
     home='/var/lib/family-approvers/'+identifier
@@ -115,7 +115,7 @@ def install(api,profile,args):
         tx.rollback();subprocess.run(['/usr/bin/systemctl','daemon-reload'])
         if subprocess.run(['/usr/bin/sshd','-t']).returncode==0:subprocess.run(['/usr/bin/systemctl','reload','sshd'])
         raise
-    print('Approval-only parent enrolled:',helper['label'],'; root files changed:',len(tx.changes))
+    print('Scoped approval access enrolled:',helper['label'],'; root files changed:',len(tx.changes))
     print('Existing technical helper, learner menu, keys and desktop configuration were preserved. No sudoers grant or administrator credential was added.')
     print('Delegated menu scope:',', '.join(profile['approval_scope']['menus']))
     print('Delegated repository packages:',', '.join(profile['approval_scope']['packages']) or '(none beyond the named menu scope)')

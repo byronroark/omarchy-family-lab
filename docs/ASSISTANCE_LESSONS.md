@@ -67,3 +67,7 @@ Enrollment now asks for Dad, Mom, or another parent/guardian and a child-facing 
 ## Approval-only parent implementation
 
 The next feature separates technical help from delegated approve/deny access. Additional parents use independent locked SSH transport identities, a peer-UID-authenticated root Unix-socket worker, frozen versioned app plans and one-shot durable jobs. No admin credentials, sudoers grant or technical-session aliases are enrolled for this role, and existing technical keys/desktop configuration are preserved. See [APPROVAL_ONLY.md](APPROVAL_ONLY.md) for exact scope, trusted bootstrap requirements, recovery and outstanding live acceptance. Updates, agents, drivers/input-group changes and arbitrary sudo prompts are deliberately outside this first delegated app worker.
+
+## Technical helper quick approvals
+
+Every new technical Mom/Dad enrollment includes the same scoped approve/deny app card alongside private admin review; approval-only parents receive approve/deny too. It adds an independent restricted approval transport key; ordinary teaching/help actions and encrypted administrator access remain available. Legacy technical profiles do not opt in automatically. Isolated enrollment, card and real local socket protocol tests cover this combination; household deployment and a real quick-approved package install remain outstanding. Endpoint-only enrollment avoids rewriting existing learner keys or desktop configuration.

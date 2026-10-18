@@ -13,7 +13,8 @@ def selected_helper(profile):
     return dict(profile['dad'],kind='dad',label='Dad')
 
 def capability(profile):return selected_helper(profile).get('capability','technical')
-def expected_keys(profile):return {'approval'} if capability(profile)=='approver' else {'poll','view','control'}
+def delegated(profile):return capability(profile)=='approver' or selected_helper(profile).get('quick_approval',False)
+def expected_keys(profile):return ({'poll','view','control'} if capability(profile)=='technical' else set()) | ({'approval'} if delegated(profile) else set())
 def default_approval_scope():
     catalog=json.loads((ROOT/'assistance/family-menu-catalog.json').read_text())
     return {'packages':[],'menus':sorted(name for name,item in catalog.items() if not name.startswith('_') and item['mode'] in ('package','script'))}
@@ -58,12 +59,13 @@ def validate(profile):
     label=helper.get('label')
     if not isinstance(label,str) or not 1<=len(label)<=40 or not all(c.isprintable() for c in label):raise ValueError('Use a short printable helper display label')
     if capability(profile) not in ('technical','approver'):raise ValueError('Choose technical or approver capability')
-    if capability(profile)=='approver':
+    if type(helper.get('quick_approval',False)) is not bool:raise ValueError('quick_approval must be a boolean')
+    if delegated(profile):
         identifier=plain(helper.get('id'))
         if len(identifier)>20:raise ValueError('Approval parent ID must have at most 20 characters')
         validate_scope(profile.get('approval_scope'))
-        if 'identity_file' in profile['admin']:raise ValueError('Approval-only profiles must not carry an administrator private-key path')
-    elif 'approval_scope' in profile:raise ValueError('Delegated scope belongs only to an approval-only enrollment')
+        if capability(profile)=='approver' and 'identity_file' in profile['admin']:raise ValueError('Approval-only profiles must not carry an administrator private-key path')
+    elif 'approval_scope' in profile:raise ValueError('Delegated scope requires approval access')
     ipaddress.ip_address(profile['learner']['host'])
     if type(learner['port']) is not int or not 1<=learner['port']<=65535:raise ValueError('Invalid SSH port')
     mom=profile.get('other_parent',profile.get('mom',{'enabled':False}))
@@ -107,12 +109,14 @@ def prompt_profile():
     label=ask('What should the child call this helper?',{'dad':'Dad','mom':'Mom','parent':'Parent'}[kind])
     access=ask('Access: approver (approve/deny apps only) / technical (terminal/admin help)','approver').lower()
     if access not in ('approver','technical'):raise ValueError('Choose approver or technical')
-    parent_id=ask('Stable approval parent ID',kind) if access=='approver' else None
+    # Every new parent receives scoped approve/deny; technical access adds tools.
+    quick=access=='technical'
+    parent_id=ask('Stable approval parent ID',kind)
     profile={'schema_version':1,'learner':{'id':ask('Stable learner ID','learner-a'),'login':ask('Existing child login'),'label':ask('Private child display label','Learner'),'host':ask('Child device IP'),'port':int(ask('Child SSH port','22'))},
        'admin':{'login':ask('Existing separate parent administrator login'),**({'identity_file':ask('Administrator private key (stays on the helper PC)','~/.ssh/family_admin_ed25519')} if access=='technical' else {})},
-       'helper':{'kind':kind,'label':label,'capability':access,**({'id':parent_id} if parent_id else {}),'login':ask(label+' desktop login',me),'host':ask(label+' device IP as seen by the child')},
+       'helper':{'kind':kind,'label':label,'capability':access,'quick_approval':quick,**({'id':parent_id} if parent_id else {}),'login':ask(label+' desktop login',me),'host':ask(label+' device IP as seen by the child')},
        'other_parent':{'enabled':False,'login':ask('Additional parent login (optional; not enrolled)'),'host':ask('Additional parent device IP (optional; not enrolled)')},'bar':True}
-    if access=='approver':
+    if access=='approver' or quick:
         profile['approval_scope']=default_approval_scope()
         extra=ask('Extra exact repository/package names this parent may approve (comma separated; optional)')
         profile['approval_scope']['packages']=[value.strip() for value in extra.split(',') if value.strip()]
@@ -268,7 +272,7 @@ def apply_learner(profile,args):
     child=pwd.getpwnam(profile['learner']['login']);admin=pwd.getpwnam(profile['admin']['login'])
     if child.pw_uid<1000 or admin.pw_uid==0 or child.pw_uid==admin.pw_uid or groups(child)&BAD_GROUPS:raise ValueError('Learner must be a standard account, separate from the administrator; review effective privileges before setup')
     if 'wheel' not in groups(admin):raise ValueError('Choose an existing verified wheel administrator; this installer does not grant admin rights')
-    if set(profile.get('public_keys',{}))!={'poll','view','control'}:raise ValueError('Use the helper-generated public enrollment bundle, with three independent keys')
+    if set(profile.get('public_keys',{}))!=expected_keys(profile):raise ValueError('Use the helper-generated public enrollment bundle with all independent role keys')
     for command in ('sshd','setpriv','setfacl','tmux','ssh-keygen','systemctl'):
         if not shutil.which(command):raise ValueError('Missing prerequisite: '+command+'; install it deliberately through parent administration')
     check_sudo_absent(child)
@@ -354,11 +358,11 @@ def helper_files(profile,home,identity,keys):
     aliases={role:prefix+'-'+role for role in ('poll','view','control','admin')}
     known=config/'known_hosts';ssh_config=config/'ssh.conf'
     host=learner['host'] if learner['port']==22 else '['+learner['host']+']:'+str(learner['port'])
-    if capability(profile)=='approver':
+    lines=[]
+    if delegated(profile):
         alias=prefix+'-approval-'+selected_helper(profile)['id']
         lines=['Host '+alias,'    HostName '+learner['host'],'    Port '+str(learner['port']),'    User familyap-'+selected_helper(profile)['id'],'    IdentityFile '+ssh_value(str(keys/'help-approval-ed25519')),'    UserKnownHostsFile '+ssh_value(str(known)),'    GlobalKnownHostsFile /dev/null','    StrictHostKeyChecking yes','    IdentitiesOnly yes','    IdentityAgent none','    ForwardAgent no','    ClearAllForwardings yes','    ControlMaster no','    ControlPath none','    PermitLocalCommand no','    RequestTTY no','    BatchMode yes','']
-    else:
-        lines=[]
+    if capability(profile)=='technical':
         for role in ('poll','view','control','admin'):
             lines+=['Host '+aliases[role], '    HostName '+learner['host'],'    Port '+str(learner['port']),
                     '    User '+(profile['admin']['login'] if role=='admin' else learner['login']),
@@ -371,7 +375,7 @@ def helper_files(profile,home,identity,keys):
     helper_settings={'capability':capability(profile),'helper_label':selected_helper(profile)['label'],'helper_slug':selected_helper(profile)['kind'],'label':learner['label'],'ssh_config':str(ssh_config),'poll_alias':aliases['poll'],'view_alias':aliases['view'],'control_alias':aliases['control'],'admin_alias':aliases['admin']}
     if capability(profile)=='approver':
         helper_settings={key:value for key,value in helper_settings.items() if key not in ('poll_alias','view_alias','control_alias','admin_alias')}
-        helper_settings['approval_alias']=alias
+    if delegated(profile):helper_settings.update(approval_alias=alias,quick_approval=selected_helper(profile).get('quick_approval',False))
     result={}
     for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
         result['.local/bin/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
@@ -439,14 +443,14 @@ def verify(profile,role):
         home=pathlib.Path.home();config_path=home/'.config/family-help/helper.json'
         if not config_path.exists():config_path=home/'.config/family-help/dad.json'
         config=json.loads(config_path.read_text())
-        for key in (('approval_alias',) if capability(profile)=='approver' else ('poll_alias','view_alias','control_alias','admin_alias')):
+        for key in ((('poll_alias','view_alias','control_alias','admin_alias') if capability(profile)=='technical' else ()) + (('approval_alias',) if delegated(profile) else ())):
             result=run(['/usr/bin/ssh','-G','-F',config['ssh_config'],config[key]],capture_output=True,text=True).stdout
             settings=dict(line.split(' ',1) for line in result.splitlines() if ' ' in line)
             if settings.get('stricthostkeychecking')!='true' or settings.get('forwardagent')!='no':raise ValueError('Unsafe effective helper SSH settings')
         print('Local helper config and strict host checking verified. This does not prove the remote learner is enrolled or a GUI request was received.')
     else:
         if os.geteuid()!=0:raise ValueError('Learner verification needs parent sudo to inspect effective SSH policy')
-        if capability(profile)=='approver':
+        if delegated(profile):
             setup=runpy.run_path(str(ROOT/'setup/approval_setup.py'));helper=selected_helper(profile)
             setup['verify_policy'](globals(),'familyap-'+helper['id'],helper['id'])
             path=pathlib.Path('/etc/family-help/approvers.json');trusted_system_file(path)
@@ -454,7 +458,8 @@ def verify(profile,role):
             if not entry.get('enabled') or entry['scope']!=profile['approval_scope']:raise ValueError('Delegated parent permissions differ from the reviewed profile')
             node=pathlib.Path('/run/family-help-approval/control.sock').stat()
             if not stat.S_ISSOCK(node.st_mode) or node.st_uid!=0 or node.st_gid!=grp.getgrnam('family-help-approvers').gr_gid or node.st_mode&0o777!=0o660:raise ValueError('Approval socket permissions differ')
-            print('Approval-only SSH role, delegated scope and root/group socket permissions verified; live acceptance remains required.');return
+            print('Scoped approval SSH role, delegated scope and root/group socket permissions verified; live acceptance remains required.')
+            if capability(profile)=='approver':return
         account=pwd.getpwnam(profile['learner']['login'])
         if groups(account)&BAD_GROUPS:raise ValueError('Learner has a privileged supplemental group')
         verify_viewer_policy()
@@ -476,9 +481,11 @@ def main():
     parser.add_argument('--profile',default=str(pathlib.Path.home()/'.config/family-help/setup.json'))
     parser.add_argument('--out',help='New private directory outside the repository for bundle')
     parser.add_argument('--approval-only',action='store_true',help='Refuse any technical-role profile; use when a technical parent installs another parent’s data-only enrollment')
+    parser.add_argument('--approval-transport-only',action='store_true',help='Enroll only the scoped approval endpoint on an existing learner setup, preserving technical keys and desktop configuration')
     parser.add_argument('--activate',action='store_true',help='Start graphical services now; requires the intended desktop session')
     parser.add_argument('--adopt-existing',action='store_true',help='Explicitly replace reviewed existing managed files, preserving private backups')
     args=parser.parse_args();os.umask(0o077)
+    if args.approval_transport_only and (args.command!='apply' or args.role!='learner'):raise ValueError('--approval-transport-only is only for apply --role learner')
     args.profile=str(pathlib.Path(args.profile).expanduser().absolute())
     # Configuration is intentionally outside Git: IPs and family names are private.
     if pathlib.Path(args.profile)==ROOT or ROOT in pathlib.Path(args.profile).parents:raise ValueError('Keep the private setup profile outside the checkout')
@@ -494,6 +501,7 @@ def main():
         print('Read-only enrollment plan:')
         print(json.dumps({'learner':profile['learner'],'helper':selected_helper(profile),'other_parent':profile.get('other_parent',profile.get('mom',{'enabled':False}))},indent=2))
         print('Capability:',capability(profile))
+        if capability(profile)=='technical' and delegated(profile):print('Quick approvals enabled for explicitly reviewed scope:',json.dumps(profile['approval_scope']))
         print('Administrator:',profile['admin']['login'])
         if capability(profile)=='approver':
             print('Approval-only: own restricted key; no admin, view or control credentials. Existing technical helper is preserved. Root socket worker executes only exact approved app plans.')
@@ -508,8 +516,9 @@ def main():
         else:
             local=public_key(pathlib.Path('/etc/ssh/ssh_host_ed25519_key.pub').read_text().strip())
             if local!=public_key(profile.get('host_key','')) or fingerprint(local)!=profile.get('host_fingerprint'):raise ValueError('Enrollment bundle belongs to a different learner host')
-            if capability(profile)=='approver':runpy.run_path(str(ROOT/'setup/approval_setup.py'))['install'](globals(),profile,args)
-            else:apply_learner(profile,args)
+            if args.approval_transport_only and not delegated(profile):raise ValueError('Approval transport requires an explicitly scoped enrollment')
+            if capability(profile)=='technical' and not args.approval_transport_only:apply_learner(profile,args)
+            if delegated(profile):runpy.run_path(str(ROOT/'setup/approval_setup.py'))['install'](globals(),profile,args)
     elif args.command=='bundle':
         if not args.out:raise ValueError('bundle requires --out outside the repository')
         enrollment_bundle(profile,args.out)

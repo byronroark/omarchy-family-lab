@@ -78,7 +78,7 @@ class DelegatedApproval(unittest.TestCase):
         with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
             client.connect(path);send_message(client,{'op':'prepare','request':self.request});result=read_message(client)
         thread.join(3);listener.close();self.assertTrue(result['ok']);self.assertEqual(result['plan']['transaction'],self.plan['transaction'])
-    def test_client_bridge_worker_protocol_end_to_end_without_ssh(self):
+    def test_client_bridge_worker_protocol_end_to_end_without_ssh(self,technical=False):
         import subprocess
         import family_approval_client as client_module
         path=str(self.base/'wire.sock');listener=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);listener.bind(path);listener.listen()
@@ -95,7 +95,7 @@ class DelegatedApproval(unittest.TestCase):
             self.assertEqual(args[0],'/usr/bin/ssh');self.assertIn('-T',args)
             env=dict(os.environ,PYTHONPATH=str(ROOT/'assistance'),SSH_ORIGINAL_COMMAND='')
             return real_popen(['/usr/bin/python3',str(bridge)],env=env,**kwargs)
-        config={'capability':'approver','ssh_config':'not-used','approval_alias':'restricted-approver'}
+        config={'capability':'technical' if technical else 'approver','quick_approval':technical,'ssh_config':'not-used','approval_alias':'restricted-approver'}
         try:
             with patch.object(client_module.subprocess,'Popen',side_effect=transport):
                 review=client_module.rpc(config,{'op':'prepare','request':self.request})
@@ -105,6 +105,13 @@ class DelegatedApproval(unittest.TestCase):
                 with self.assertRaises(ValueError):client_module.decision(config,review,'approve')
             thread.join(5);self.assertFalse(thread.is_alive());self.assertFalse(failures);self.assertEqual(len(self.calls),1)
         finally:listener.close()
+    def test_technical_quick_client_bridge_worker_end_to_end(self):
+        self.test_client_bridge_worker_protocol_end_to_end_without_ssh(technical=True)
+    def test_legacy_technical_client_cannot_use_unenrolled_approval(self):
+        import family_approval_client as client
+        with patch.object(client.subprocess,'Popen') as transport:
+            with self.assertRaises(ValueError):client.rpc({'capability':'technical'},{'op':'poll'})
+            transport.assert_not_called()
     def test_added_parent_preserves_existing_registry_and_technical_paths(self):
         p=profile();p.pop('dad');p.pop('mom');p['admin'].pop('identity_file');p['helper']={'id':'mom','kind':'mom','label':'Mom','login':'helper','host':'192.0.2.20','capability':'approver'};p['approval_scope']={'packages':[],'menus':[]};p['public_keys']={'approval':key(9)}
         original={'version':1,'principals':{'959':{'id':'otherparent','label':'Other','enabled':True,'scope':{'packages':[],'menus':[]}}}}
