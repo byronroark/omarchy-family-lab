@@ -47,3 +47,5 @@ jobs:
         run: python3 tests/check_delegated_approval.py && python3 tests/check_delegated_setup.py && python3 tests/check_approval_widget.py
       - name: Verify protected breaks, scoped parent cards and controls enrollment (isolated)
         run: python3 tests/check_breaks.py && python3 tests/check_policy_client.py && python3 tests/check_policy_setup.py && python3 tests/check_policy_widget.py && python3 tests/check_family_theme.py
+      - name: Verify optional Google homepage redirect scope
+        run: python3 tests/check_browser_redirect.py
