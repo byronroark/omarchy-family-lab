@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Parent screen-time cards; all authority stays on the child policy service."""
-import copy,threading,pathlib,re,tomllib
+import copy,threading
 import gi
 gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
 from gi.repository import Gtk,Gdk,GLib
@@ -8,23 +8,19 @@ from family_identity import helper_config
 from family_policy_client import request,report
 DAYS=('mon','tue','wed','thu','fri','sat','sun')
 def theme_css(home=None):
-    colors={'background':'#1a1b26','foreground':'#c0caf5','accent':'#7aa2f7','selection':'#292e42','muted':'#565f89'}
-    try:
-        data=tomllib.loads(((pathlib.Path.home() if home is None else pathlib.Path(home))/'.local/state/omarchy/current/theme/colors.toml').read_text())
-        colors.update({key:value for key,value in data.items() if key in colors and isinstance(value,str) and re.fullmatch(r'#[0-9a-fA-F]{6}',value)})
-    except (OSError,ValueError):pass
-    bg,fg,accent,selection,muted=(colors[key] for key in ('background','foreground','accent','selection','muted'))
-    return f"""
-    .family-time {{ background: {bg}; color: {fg}; font-family: monospace; font-size: 12px; }}
-    .family-time .heading {{ color: {accent}; font-size: 19px; font-weight: bold; }}
-    .family-time .feedback {{ color: {accent}; }}
-    .family-time entry, .family-time spinbutton, .family-time dropdown, .family-time button {{ background: {bg}; color: {fg}; border: 1px solid {muted}; border-radius: 3px; min-height: 25px; }}
-    .family-time entry {{ padding: 2px 8px; }}
-    .family-time button {{ padding: 4px 10px; }}
-    .family-time button:hover {{ background: {selection}; border-color: {accent}; }}
-    .family-time .primary {{ border-color: {accent}; color: {accent}; font-weight: bold; }}
-    .family-time selection {{ background: {selection}; color: {fg}; }}
-    """.encode()
+    # Match the established Ask Dad cards rather than the desktop palette.
+    return b"""
+    .family-time { background: #101820; color: #d9e5ee; font-family: monospace; font-size: 12px; }
+    .family-time .heading { color: #74e0c3; font-size: 21px; font-weight: bold; }
+    .family-time .feedback { color: #70d5ff; }
+    .family-time entry, .family-time spinbutton, .family-time dropdown { background: #192733; color: #edf6ff; border: 1px solid #3e586b; border-radius: 6px; min-height: 25px; }
+    .family-time entry { padding: 3px 8px; }
+    .family-time button { background: #20313e; color: #e1edf5; border: 1px solid #425c70; border-radius: 6px; padding: 7px 10px; }
+    .family-time button:hover { background: #2a4252; }
+    .family-time .primary { background: #183f3a; color: #95f5d7; border-color: #58b99a; font-weight: bold; }
+    .family-time .footer { background: #101820; border-top: 1px solid #345266; padding: 12px 16px; }
+    .family-time selection { background: #2a4252; color: #edf6ff; }
+    """
 
 class App(Gtk.Application):
     def __init__(self):
@@ -42,10 +38,13 @@ class App(Gtk.Application):
         self.css=Gtk.CssProvider();self.update_theme()
         Gtk.StyleContext.add_provider_for_display(Gdk.Display.get_default(),self.css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
         GLib.timeout_add_seconds(3,self.update_theme)
-        self.win=Gtk.ApplicationWindow(application=self,title='Family breaks and bedtime',default_width=640,default_height=800)
+        self.win=Gtk.ApplicationWindow(application=self,title='Family breaks and bedtime',default_width=640,default_height=740)
         self.win.set_decorated(False);self.win.add_css_class('family-time')
         self.box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=7,margin_top=18,margin_bottom=18,margin_start=20,margin_end=20)
-        scroll=Gtk.ScrolledWindow();scroll.set_child(self.box);self.win.set_child(scroll)
+        layout=Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        scroll=Gtk.ScrolledWindow(vexpand=True);scroll.set_policy(Gtk.PolicyType.NEVER,Gtk.PolicyType.ALWAYS);scroll.set_child(self.box)
+        self.footer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8);self.footer.add_css_class('footer')
+        layout.append(scroll);layout.append(self.footer);self.win.set_child(layout)
         self.feedback=self.label('Connecting to your child’s policy service…');self.win.present();self.refresh()
     def run_task(self,work,done,quiet=False):
         if self.busy:return
@@ -67,6 +66,9 @@ class App(Gtk.Application):
         child=self.box.get_first_child()
         while child:
             nxt=child.get_next_sibling();self.box.remove(child);child=nxt
+        child=self.footer.get_first_child()
+        while child:
+            nxt=child.get_next_sibling();self.footer.remove(child);child=nxt
         self.label('$ family-time').add_css_class('heading')
         self.feedback=self.label('Connected' if data.get('healthy') else 'Service is starting or unhealthy; do not rely on enforcement yet.')
         self.feedback.add_css_class('feedback')
@@ -91,15 +93,15 @@ class App(Gtk.Application):
         self.timezone=Gtk.Entry(text=data['policy']['timezone']);self.box.append(self.timezone)
         self.modes=['off','monitor']+(['enforce'] if data.get('capabilities',{}).get('protected_break_guard') else [])
         self.mode=Gtk.DropDown.new_from_strings(self.modes);self.mode.set_selected(self.modes.index(subject['mode']) if subject['mode'] in self.modes else 1);self.box.append(self.mode)
-        self.button('Apply break schedule and allowed hours',self.apply).add_css_class('primary')
+        self.button('Apply break schedule and allowed hours',self.apply,self.footer).add_css_class('primary')
         current=state.get('break')
         if current and current['episode']:
             for title,change,minutes in [('Skip this break','skip',0),('Shorten this break by 5 minutes','shorten',5),('Extend this break by 5 minutes','extend',5)]:
                 self.button(title,lambda change=change,minutes=minutes:self.operation({'op':'break-adjust','peer':peer,'episode':current['episode'],'revision':current['revision'],'change':change,'minutes':minutes}))
-        bedtime=Gtk.Box(spacing=8,homogeneous=True);self.box.append(bedtime)
+        bedtime=Gtk.Box(spacing=8,homogeneous=True);self.footer.append(bedtime)
         for title,op in [('Skip bedtime today',{'op':'bedtime-today','enabled':True}),('Restore bedtime today',{'op':'bedtime-today','enabled':False})]:
             self.button(title,lambda op=op:self.operation(dict(op,peer=peer)),bedtime)
-        tools=Gtk.Box(spacing=8,homogeneous=True);self.box.append(tools)
+        tools=Gtk.Box(spacing=8,homogeneous=True);self.footer.append(tools)
         self.button('Save private time report',lambda:self.run_task(lambda:report(request({'op':'summary'}),peer),lambda path:self.feedback.set_text('Saved private report: '+str(path))),tools)
         self.button('Refresh',self.refresh,tools)
         self.button('Close',self.win.close,tools)
