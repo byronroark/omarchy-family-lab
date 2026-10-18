@@ -45,6 +45,8 @@ class DelegatedApproval(unittest.TestCase):
     def test_change_after_queue_fails_without_execution(self):
         review=self.prepare();self.decide(review);self.plan['transaction']=['extra/jq=2.0-1'];self.broker.run_next();self.assertFalse(self.calls)
         self.assertEqual(json.loads(self.broker.receipt('a'*32).read_text())['status'],'failed')
+        self.assertIn('Approved package plan changed',json.loads(self.broker.receipt('a'*32).read_text())['error'])
+        self.assertNotIn('error',json.loads((self.base/'results'/('a'*32+'.json')).read_text()))
     def test_revocation_before_start(self):
         review=self.prepare();self.decide(review);self.principals[str(self.uid)]['enabled']=False;self.broker.run_next();self.assertFalse(self.calls)
     def test_unsupported_can_be_denied_but_not_approved(self):

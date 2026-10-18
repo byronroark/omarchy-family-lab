@@ -73,9 +73,11 @@ class Broker:
             fcntl.flock(file,fcntl.LOCK_EX|fcntl.LOCK_NB)
             yield
     def receipt(self,identifier_):return self.base/'audit'/(identifier(identifier_)+'.json')
-    def record(self,request,status,principal,code=None):
+    def record(self,request,status,principal,code=None,error=None):
         value={'id':request['id'],'status':status,'returncode':code,'time':self.clock()}
-        write_json(self.receipt(request['id']),dict(value,request=request,approver=principal))
+        private=dict(value,request=request,approver=principal)
+        if error is not None:private['error']=str(error)[:500]
+        write_json(self.receipt(request['id']),private)
         write_json(self.base/'results'/(request['id']+'.json'),value,0o644)
     def operation(self,uid,value):
         principal=self.principal(uid)
@@ -136,8 +138,8 @@ class Broker:
                     self.record(request,'running',principal['id'])
                     code=self.executor(request,job['plan'])
                     self.record(request,'completed' if code==0 else 'failed',principal['id'],code)
-                except Exception:
-                    self.record(request,'failed',principal['id'],1)
+                except Exception as exc:
+                    self.record(request,'failed',principal['id'],1,error=exc)
                 return True
         return False
 
