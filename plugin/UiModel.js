@@ -9,6 +9,8 @@ function parse(raw) {
         var row = data.requests[i]
         if (!/^[a-f0-9]{32}$/.test(row.id) || typeof row.peer !== "string" || typeof row.message !== "string" || row.message.length > 600 || typeof row.via !== "string" || typeof row.expires !== "number" || !isFinite(row.expires) || !Array.isArray(row.actions))
             throw new Error("Invalid request card")
+        if (row.name !== undefined && (typeof row.name !== "string" || row.name.length > 256))
+            throw new Error("Invalid display name")
         for (var j = 0; j < row.actions.length; j++) {
             var action = row.actions[j]
             if (typeof action.label !== "string" || !commandFor("family-lab", row.id, action.kind, action.target || ""))

@@ -26,3 +26,11 @@ logs/
 *.pcap*
 .DS_Store
 /work/
+
+# Household parental-control state and exports
+enrollment.json
+usage.json
+gate.json
+policy.local.*
+*.jsonl
+reports/

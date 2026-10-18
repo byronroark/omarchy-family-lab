@@ -1,0 +1,138 @@
+#!/usr/bin/python3 -I
+"""Deliberate system installation. No changes unless --apply is supplied."""
+import argparse
+import grp
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import pwd
+import shutil
+import subprocess
+
+parser=argparse.ArgumentParser()
+parser.add_argument('--apply',action='store_true')
+parser.add_argument('--subject',help='Existing standard learner Linux login')
+parser.add_argument('--peer',help='Stable learner ID')
+parser.add_argument('--parent-account',help='Existing dedicated forced-command parent login to enroll')
+parser.add_argument('--parent-label',default='Parent')
+parser.add_argument('--browser',choices=['chromium'],help='Permit machine-wide managed browser policy; not a DNS filter')
+parser.add_argument('--enable-pam',action='store_true',help='Prepend gate to reviewed Arch system-login account stack')
+args=parser.parse_args()
+root=Path(__file__).resolve().parents[1]
+source=root/'parental/family-lab-policy'
+loader=importlib.machinery.SourceFileLoader('family_policy',str(source))
+spec=importlib.util.spec_from_loader(loader.name,loader);m=importlib.util.module_from_spec(spec);loader.exec_module(m)
+
+def main():
+    if args.subject:
+        if not args.peer:
+            raise ValueError('--subject requires --peer')
+        m.identifier(args.peer)
+        account=pwd.getpwnam(args.subject)
+        groups={grp.getgrgid(gid).gr_name for gid in os.getgrouplist(args.subject,account.pw_gid)}
+        if account.pw_uid<1000 or groups & {'wheel','docker','empower','disk','input','lxd','incus-admin','libvirt'}:
+            raise ValueError('Subject must be a normal standard account without administrative/raw-device groups (wheel/docker/empower/disk/input/lxd/incus-admin/libvirt)')
+    if args.parent_account:
+        parent=pwd.getpwnam(args.parent_account)
+        m.label(args.parent_label)
+        if parent.pw_uid == 0:
+            raise ValueError('Use a separate non-root forced-command parent account')
+    print('Plan: install root-owned policy executable and systemd unit; create disabled policy if new; enroll requested identities.')
+    print('No existing policy or usage data will be replaced. No service starts automatically.')
+    if args.browser:
+        print('Browser permission: Chromium machine-wide policy; all users/profiles on this PC are affected when enabled.')
+    if args.enable_pam:
+        print('PAM: back up system-login; prepend account gate. Verify recovery and real login paths before enforcing.')
+    if not args.apply:
+        print('Dry run only. Review the source/docs; rerun with --apply deliberately from the local parent admin.')
+        return
+    if os.geteuid()!=0:
+        raise PermissionError('--apply requires an interactive parent administrator (sudo)')
+    os.umask(0o077)
+    etc=Path('/etc/family-lab');data=Path('/var/lib/family-lab')
+    etc.mkdir(mode=0o755,exist_ok=True);data.mkdir(mode=0o700,exist_ok=True)
+    if etc.is_symlink() or data.is_symlink() or etc.stat().st_uid != 0 or data.stat().st_uid != 0:
+        raise ValueError('System directories must be real root-owned directories')
+    etc.chmod(0o755);data.chmod(0o700)
+    config_path=etc/'enrollment.json'
+    config=m.read(config_path) if config_path.exists() else {'subjects':{},'parents':{},'browsers':[]}
+    if args.subject:
+        existing=config['subjects'].get(args.peer)
+        row={'uid':account.pw_uid,'login':args.subject}
+        if existing and existing!=row:
+            raise ValueError('Peer already enrolled differently')
+        if any(r['uid']==account.pw_uid and peer!=args.peer for peer,r in config['subjects'].items()):
+            raise ValueError('Linux user already enrolled under another peer')
+        if len(config['subjects'])>=8 and args.peer not in config['subjects']:
+            raise ValueError('At most eight subjects')
+        if str(account.pw_uid) in config['parents']:
+            raise ValueError('A learner cannot also be a policy parent')
+        # Enrollment changes require explicit policy migration, not silently adding a live subject.
+        if (data/'policy.json').exists() and args.peer not in config['subjects']:
+            raise ValueError('Adding subjects to a running installation needs a reviewed policy migration')
+        config['subjects'][args.peer]=row
+    if not config['subjects']:
+        raise ValueError('Enroll a subject on first installation')
+    if args.parent_account:
+        if parent.pw_uid in [row['uid'] for row in config['subjects'].values()]:
+            raise ValueError('Learner cannot be a policy parent')
+        config['parents'][str(parent.pw_uid)]=args.parent_label
+    if args.browser and args.browser not in config['browsers']:
+        target=Path('/etc/chromium/policies/managed/family-lab.json')
+        if target.exists():
+            raise ValueError('Existing unmanaged family-lab browser file: review before adopting')
+        for directory in [target.parent.parent.parent,target.parent.parent,target.parent]:
+            directory.mkdir(mode=0o755,parents=True,exist_ok=True)
+            if directory.is_symlink() or directory.stat().st_uid != 0:
+                raise ValueError('Browser policy directories must be real root-owned directories')
+            directory.chmod(0o755)
+        config['browsers'].append(args.browser)
+    try:
+        grp.getgrnam('family-lab-parents')
+    except KeyError:
+        subprocess.run(['/usr/bin/groupadd','--system','family-lab-parents'],check=True)
+    if args.parent_account:
+        subprocess.run(['/usr/bin/usermod','-a','-G','family-lab-parents',args.parent_account],check=True)
+    Path('/usr/local/libexec').mkdir(mode=0o755,exist_ok=True)
+    import tempfile
+    fd, executable = tempfile.mkstemp(dir='/usr/local/libexec')
+    with os.fdopen(fd,'wb') as output:
+        output.write(source.read_bytes());output.flush();os.fsync(output.fileno())
+    os.chmod(executable,0o755);os.replace(executable,'/usr/local/libexec/family-lab-policy')
+    shutil.copyfile(root/'systemd/family-lab-policy.service','/etc/systemd/system/family-lab-policy.service')
+    os.chmod('/etc/systemd/system/family-lab-policy.service',0o644)
+    m.atomic(config_path,config,0o644)
+    if not (data/'policy.json').exists():
+        m.atomic(data/'policy.json',{'revision':0,'policy':m.defaults(config['subjects'])})
+    if not (etc/'gate.json').exists():
+        m.atomic(etc/'gate.json',{'subjects':{str(row['uid']):False for row in config['subjects'].values()}},0o644)
+    if args.enable_pam:
+        pam=Path('/etc/pam.d/system-login')
+        if pam.is_symlink():
+            raise ValueError('PAM file is a symlink: review manually')
+        text=pam.read_text()
+        if 'account' not in text or 'system-auth' not in text:
+            raise ValueError('Unknown PAM layout; no automatic change permitted')
+        line='account requisite pam_exec.so quiet /usr/local/libexec/family-lab-policy login-check\n'
+        if line not in text:
+            backup=etc/'system-login.before-family-lab'
+            if backup.exists():
+                raise ValueError('PAM backup exists but gate differs: review manually')
+            shutil.copyfile(pam,backup);backup.chmod(0o600)
+            # Write regular root-owned file atomically without a submitted policy path.
+            import tempfile
+            fd,name=tempfile.mkstemp(dir=pam.parent)
+            with os.fdopen(fd,'w') as output:
+                output.write('# Family Lab optional login gate\n'+line+text)
+                output.flush();os.fsync(output.fileno())
+            os.chmod(name,0o644);os.replace(name,pam)
+        (etc/'pam-ready').write_text('Gate installed; real login-path acceptance still required.\n')
+    subprocess.run(['/usr/bin/systemctl','daemon-reload'],check=True)
+    print('Installed with modules off if new. Audit sudo/polkit and actual PAM/browser paths before enabling. Start service deliberately with systemctl enable --now family-lab-policy.')
+
+try:
+    main()
+except Exception as error:
+    parser.exit(1,'Installation stopped: '+str(error)+'\n')

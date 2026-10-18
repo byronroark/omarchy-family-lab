@@ -1,0 +1,29 @@
+[Unit]
+Description=Family Lab child-local parental policy service
+After=systemd-logind.service
+Requires=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/family-lab-policy daemon
+Restart=on-failure
+RestartSec=2
+UMask=0077
+RuntimeDirectory=family-lab
+RuntimeDirectoryMode=0755
+StateDirectory=family-lab
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/etc/family-lab /var/lib/family-lab /run/family-lab
+ReadWritePaths=-/etc/chromium/policies/managed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

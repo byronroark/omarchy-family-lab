@@ -18,6 +18,12 @@ def alias(s):
     if not isinstance(s, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', s):
         raise ValueError('Use a plain SSH alias, not a hostname/command string')
     return s
+def peer_label(person, cfg):
+    label = cfg.get('peer_labels', {}).get(person, person)
+    if not isinstance(label, str) or not 1 <= len(label) <= 80 or not all(c.isprintable() for c in label):
+        raise ValueError('Peer labels must be 1-80 printable characters')
+    return label if label == person else label + ' (' + person + ')'
+
 def ssh_args(host):
     return ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', alias(host)]
@@ -199,7 +205,7 @@ def request_menu(identifier):
     zenity = shutil.which('zenity')
     if not zenity:
         raise ValueError('Forwarding menu needs Zenity; use family-lab forward ID HELPER instead')
-    text = 'Help requested: ' + data['person'] + '\n' + data['message']
+    text = 'Help requested: ' + peer_label(data['person'], cfg) + '\n' + data['message']
     result = subprocess.run([zenity, '--question', '--no-markup', '--title=Family Lab',
                              '--text=' + text, '--ok-label=Open terminal', '--cancel-label=Close',
                              '--timeout=120', *['--extra-button=' + label for label in choices]],
@@ -233,7 +239,7 @@ def notify_help(data, cfg, helper, terminal):
         action = [terminal, 'ssh', '-tt', *ssh_args(cfg['view_aliases'][data['person']])[1:]]
         body += '\nClick to open the shared terminal.'
     run([helper, '--app-name', 'Family Lab', '-u', 'normal',
-         'Help requested: ' + data['person'] + suffix, body, '--exec', *action], timeout=10)
+         'Help requested: ' + peer_label(data['person'], cfg) + suffix, body, '--exec', *action], timeout=10)
 
 def inline_alive():
     try:
@@ -264,7 +270,7 @@ def ui_state():
             actions.extend({'kind': 'forward', 'label': label, 'target': target}
                            for label, target in forward_choices(data, cfg).items())
             actions.append({'kind': 'dismiss', 'label': 'Dismiss'})
-            state['requests'].append({'id': data['id'], 'peer': data['person'],
+            state['requests'].append({'id': data['id'], 'peer': data['person'], 'name': peer_label(data['person'], cfg),
                                       'message': data['message'], 'via': data.get('forwarded_by', ''),
                                       'expires': data['expires'], 'actions': actions})
         state['requests'].sort(key=lambda row: row['expires'])
