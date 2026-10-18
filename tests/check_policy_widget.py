@@ -7,6 +7,15 @@ class WidgetTests(unittest.TestCase):
     def methods(self):
         tree=ast.parse((ROOT/'assistance/family-help-widget').read_text())
         return [node for cls in tree.body if isinstance(cls,ast.ClassDef) for node in cls.body if isinstance(node,ast.FunctionDef) and node.name in ('build_parent','build_break','decide_break')]
+    def test_schedule_save_reads_fresh_state_and_confirms(self):
+        tree=ast.parse((ROOT/'assistance/family-time-widget').read_text())
+        method=next(n for cls in tree.body if isinstance(cls,ast.ClassDef) for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='operation')
+        packets=[];labels=[];data={'revision':8,'policy':{'subjects':{'child':{'mode':'off'}}}}
+        def send(packet):packets.append(packet);return data if packet['op']=='get' else {'revision':8}
+        ns={'request':send};exec(compile(ast.Module(body=[method],type_ignores=[]),'<time save>','exec'),ns)
+        app=types.SimpleNamespace(config={'policy_peer':'child'},render=lambda value:labels.append(value),feedback=types.SimpleNamespace(set_text=labels.append),run_task=lambda work,done:done(work()))
+        ns['operation'](app,{'op':'apply','base_revision':7})
+        self.assertEqual(packets,[{'op':'apply','base_revision':7},{'op':'get'}]);self.assertIs(labels[0],data);self.assertIn('Saved successfully',labels[1])
     def test_break_cards_for_both_roles(self):
         for capability in ('technical','approver'):
             labels=[]

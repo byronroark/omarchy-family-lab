@@ -75,7 +75,14 @@ class App(Gtk.Application):
             self.label('Break request: '+item['change']+(' '+str(item['minutes'])+' minutes' if item['minutes'] else '')+' — '+item['peer'])
             self.button('Approve this break change',lambda item=item:self.operation({'op':'break-decision','id':item['id'],'decision':'approve'}))
             self.button('Deny this break change',lambda item=item:self.operation({'op':'break-decision','id':item['id'],'decision':'deny'}))
-    def operation(self,operation):self.run_task(lambda:request(operation),lambda _:self.refresh())
+    def operation(self,operation):
+        def save_and_read():
+            request(operation)
+            return request({'op':'get'})
+        def saved(data):
+            self.render(data)
+            self.feedback.set_text('Saved successfully — revision '+str(data['revision'])+'. Mode: '+data['policy']['subjects'][self.config['policy_peer']]['mode']+'.')
+        self.run_task(save_and_read,saved)
     def apply(self):
         try:
             policy=copy.deepcopy(self.snapshot['policy']);item=policy['subjects'][self.config['policy_peer']]

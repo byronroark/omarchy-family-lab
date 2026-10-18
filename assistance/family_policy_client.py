@@ -14,7 +14,13 @@ def request(operation,config=None):
     import resource
     def limit():resource.setrlimit(resource.RLIMIT_FSIZE,(LIMIT,LIMIT))
     with tempfile.TemporaryFile() as output:
-        subprocess.run(['/usr/bin/ssh','-F',config['ssh_config'],'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ConnectionAttempts=1','-o','ControlMaster=no','-o','ControlPath=none','-T',alias],input=raw,stdout=output,stderr=subprocess.PIPE,check=True,timeout=20,preexec_fn=limit)
+        try:
+            subprocess.run(['/usr/bin/ssh','-F',config['ssh_config'],'-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5','-o','ConnectionAttempts=1','-o','ControlMaster=no','-o','ControlPath=none','-T',alias],input=raw,stdout=output,stderr=subprocess.PIPE,check=True,timeout=20,preexec_fn=limit)
+        except subprocess.CalledProcessError as exc:
+            detail=(exc.stderr or b'').decode(errors='replace').strip()
+            prefix='Family Lab policy: '
+            if detail.startswith(prefix):raise ValueError(detail[len(prefix):][:400]) from None
+            raise ValueError('Could not reach the policy service. Refresh to check the saved settings before retrying.') from None
         output.seek(0);result=json.load(output)
     if not isinstance(result,dict):raise ValueError('Invalid policy response')
     if 'error' in result:raise ValueError(str(result['error'])[:500])

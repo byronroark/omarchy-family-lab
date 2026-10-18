@@ -1,4 +1,6 @@
 """Parent break-card schema and private reports without SSH or system changes."""
+import subprocess
+from unittest.mock import patch
 import copy,datetime as dt,json,os,pathlib,sys,tempfile,unittest
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'assistance'))
 import family_policy_client as client
@@ -11,6 +13,11 @@ class ClientTests(unittest.TestCase):
             with self.assertRaises(ValueError):client.validate_card(bad)
         with self.assertRaises(ValueError):client.validate_card(dict(data,command='sh'))
         with self.assertRaises(ValueError):client.validate_card(dict(data,time=data['time']-901))
+    def test_policy_conflict_is_readable_without_ssh_command_dump(self):
+        error=subprocess.CalledProcessError(1,['ssh'],stderr=b'Family Lab policy: Settings changed. Fetch and review the latest revision before applying.\n')
+        with patch.object(client.subprocess,'run',side_effect=error):
+            with self.assertRaisesRegex(ValueError,'Settings changed'):
+                client.request({'op':'get'},{'policy_alias':'family-test','ssh_config':'/private/config'})
     def test_private_report_and_empty_coverage_are_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             summary={'coverage':'No application or website observations','timezone':'America/New_York','days':{}}
