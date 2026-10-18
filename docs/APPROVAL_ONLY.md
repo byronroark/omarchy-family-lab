@@ -2,7 +2,7 @@
 
 A parent can be the technical helper or an approval-only parent, independently of whether the child calls them Mom, Dad or another name. This release adds approval-only access alongside the existing technical deployment. It does not require giving the new parent the technical administrator’s SSH key, password or shell.
 
-**Status:** implemented with isolated protocol, persistent-job, UI and enrollment tests. Real SSH/systemd/GUI enrollment on a second parent’s PC and an actual delegated package transaction still need live acceptance. It has not been installed on the existing family machines. Do not describe the fake-executor tests as a live root install or a security audit.
+**Status:** isolated protocol, persistent-job, UI and enrollment tests pass. The existing technical parent’s endpoint-only upgrade is live: SSH restrictions, socket policy, old technical access, and password-free deny/approve cards passed with a real child-menu request. The approved package was already installed, so no new package was added. Clean enrollment on a second parent’s PC and installation of a newly absent package still need live acceptance. This is not a whole-machine security audit.
 
 ## What the parent sees
 
