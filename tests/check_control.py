@@ -99,12 +99,20 @@ with tempfile.TemporaryDirectory() as directory:
         wait_for(lambda: subprocess.run(base + ['has-session', '-t', '=learning'], env=env,
                                        capture_output=True).returncode == 0, 'learning session')
         wait_for(lambda: 'C-r' in tmux('list-keys', '-T', 'prefix'), 'revoke shortcut')
+        original_clients = set(tmux('list-clients', '-F', '#{client_name}').splitlines())
         reattached, reattached_fd = terminal('learn')
         wait_for(lambda: len(tmux('list-clients', '-F', '#{client_pid}').splitlines()) == 2,
                  'learn reattaches to an existing session')
-        os.write(reattached_fd, b'\x02d')
+        # Being listed by the server does not mean the new client's terminal
+        # input is ready. Detach that exact client via the server instead of
+        # racing its startup with a Ctrl+b,d byte sequence on a loaded runner.
+        names = set(tmux('list-clients', '-F', '#{client_name}').splitlines()) - original_clients
+        assert len(names) == 1
+        tmux('detach-client', '-t', names.pop())
         reattached.wait(timeout=5)
         assert reattached.returncode == 0
+        assert learner.poll() is None
+        assert set(tmux('list-clients', '-F', '#{client_name}').splitlines()) == original_clients
         assert cli('allow-control').returncode != 0  # No piped/unattended approvals.
         assert cli('assist', 'learner-a').returncode != 0  # Not enabled by default.
         viewer, viewer_fd = terminal('view', remote=True)
