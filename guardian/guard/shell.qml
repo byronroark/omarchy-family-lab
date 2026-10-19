@@ -37,6 +37,12 @@ ShellRoot {
                     width: Math.min(parent.width - 40,700)
                     state: Object.assign({},root.state,{requestStatus:root.error || root.state.requestStatus || "Only a parent can approve a break change."})
                     onRequestChange: function(helper,change,minutes) { root.ask(helper,change,minutes) }
+                    onHibernateNow: {
+                        if (session.secure && root.state.hibernate && root.state.hibernate.enabled && !send.running) {
+                            send.command = ["/usr/local/libexec/family-lab-policy","guard","hibernate",root.state.hibernate.episode]
+                            send.running = true
+                        }
+                    }
                 }
                 // This is a break guard, not an account-password replacement.
                 // Existing normal account locks keep their own authentication.
@@ -52,7 +58,7 @@ ShellRoot {
     }
     Process {
         id: poll
-        command: ["/usr/local/libexec/family-lab-policy","guard","get"]
+        command: ["/usr/local/libexec/family-lab-policy","guard", session.secure ? "get-secure" : "get"]
         stdout: StdioCollector {
             onStreamFinished: {
                 try {
@@ -75,7 +81,7 @@ ShellRoot {
     Process { id: ack; onExited: root.refresh() }
     Process {
         id: send
-        onExited: function(code,status) { root.error = code === 0 ? "Request sent. Your break keeps counting down." : "Could not confirm delivery. Please wait before trying again."; root.refresh() }
+        onExited: function(code,status) { root.error = code === 0 ? (send.command[2] === "hibernate" ? "Hibernation requested. Your work stays protected." : "Request sent. Your break keeps counting down.") : "Could not confirm delivery. Please wait before trying again."; root.refresh() }
     }
     Timer { interval: 1000; running: true; repeat: true; onTriggered: root.refresh() }
     Component.onCompleted: root.refresh()

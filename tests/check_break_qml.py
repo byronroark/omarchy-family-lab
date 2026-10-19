@@ -8,13 +8,19 @@ with tempfile.TemporaryDirectory() as directory:
 import Quickshell
 import "Dino" as Dino
 ShellRoot {
+    property bool bedtime: false
     FloatingWindow {
         id: window
         visible: true; implicitWidth: 800; implicitHeight: 740; color: "#111c17"
         Dino.BreakCard { id: card; anchors.centerIn: parent; width: 700; state: ({phase:"break",remaining_seconds:900,helpers:["dad","mom"]}) }
     }
-    Timer { interval: 800; running: true; onTriggered: {
+    Timer { interval: 800; running: true; repeat: true; onTriggered: {
         if (card.implicitHeight > window.height) { console.error("FAIL_BREAK_BOUNDS"); Qt.quit(); return }
+        if (!bedtime) {
+            bedtime = true
+            card.state = {healthy:true,blocked:true,reason:"outside-hours",helpers:["dad","mom"],hibernate:{enabled:true,remaining_seconds:300,error:""}}
+            return
+        }
         card.grabToImage(function(image) { image.saveToFile(Quickshell.env("FAMILY_BREAK_PREVIEW")); console.log("PASS_BREAK_CARD"); Qt.quit() })
     } }
 }''')

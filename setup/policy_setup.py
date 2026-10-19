@@ -100,7 +100,7 @@ def install(api,profile,args):
         if json.loads(response).get('active') is not False:raise ValueError('Release the active guard before upgrading controls')
     try:
         tx.write('/etc/family-lab/enrollment.json',api['encoded'](config),0o644)
-        for name in ('family-lab-policy','family_breaks.py','family_guard.py'):tx.write('/usr/local/libexec/'+name,(api['ROOT']/'parental'/name).read_bytes(),0o644 if name.endswith('.py') else 0o755)
+        for name in ('family-lab-policy','family_breaks.py','family_guard.py','family_bedtime.py'):tx.write('/usr/local/libexec/'+name,(api['ROOT']/'parental'/name).read_bytes(),0o644 if name.endswith('.py') else 0o755)
         tx.write('/etc/systemd/user/family-time-warnings.service',('[Unit]\nDescription=Family break and bedtime warnings\nPartOf=graphical-session.target\nAfter=graphical-session.target\nConditionUser='+child.pw_name+'\n[Service]\nExecStart=/usr/local/libexec/family-lab-policy watch\nEnvironment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus\nRestart=on-failure\nRestartSec=5\nNoNewPrivileges=yes\n[Install]\nWantedBy=graphical-session.target\n').encode())
         tx.write('/etc/systemd/user/graphical-session.target.wants/family-time-warnings.service','/etc/systemd/user/family-time-warnings.service',0o777,True)
         tx.write('/etc/systemd/system/family-lab-policy.service',(api['ROOT']/'systemd/family-lab-policy.service').read_bytes())

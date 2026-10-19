@@ -23,7 +23,7 @@ with tempfile.TemporaryDirectory(prefix='family-nested-guard-') as directory:
         state={'healthy':True,'blocked':True,'phase':'due','remaining_seconds':900,'helpers':['dad','mom'],'episode':'a'*32,'revision':0,'reason':'break'}
         fixture=temp/'state.json';fixture.write_text(json.dumps(state));ack=temp/'protected'
         stub=temp/'policy-stub'
-        stub.write_text('#!/usr/bin/python3\nimport sys,json,pathlib\np=pathlib.Path('+repr(str(fixture))+'); state=json.loads(p.read_text())\nif sys.argv[1:]==["guard","get"]:print(json.dumps(state))\nelif sys.argv[1:3]==["guard","protected"]:\n state["phase"]="break"; p.write_text(json.dumps(state)); pathlib.Path('+repr(str(ack))+').write_text("secure"); print("{}")\nelif sys.argv[1:]==["guard","release"]:print(json.dumps({"allowed":state["healthy"] and not state["blocked"]}))\nelse:sys.exit(1)\n');stub.chmod(0o700)
+        stub.write_text('#!/usr/bin/python3\nimport sys,json,pathlib\np=pathlib.Path('+repr(str(fixture))+'); state=json.loads(p.read_text())\nif sys.argv[1:] in (["guard","get"],["guard","get-secure"]):print(json.dumps(state))\nelif sys.argv[1:3]==["guard","protected"]:\n state["phase"]="break"; p.write_text(json.dumps(state)); pathlib.Path('+repr(str(ack))+').write_text("secure"); print("{}")\nelif sys.argv[1:]==["guard","release"]:print(json.dumps({"allowed":state["healthy"] and not state["blocked"]}))\nelse:sys.exit(1)\n');stub.chmod(0o700)
         copied=temp/'Dino';shutil.copytree(ROOT/'guardian',copied)
         (copied/'guard/Dino').mkdir()
         for name in ('BreakCard.qml','PixelDino.qml'):shutil.copy2(ROOT/'guardian'/name,copied/'guard/Dino'/name)
