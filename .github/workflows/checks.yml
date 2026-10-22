@@ -49,3 +49,9 @@ jobs:
         run: python3 tests/check_breaks.py && python3 tests/check_policy_client.py && python3 tests/check_policy_setup.py && python3 tests/check_policy_widget.py && python3 tests/check_family_theme.py
       - name: Verify optional Google homepage redirect scope
         run: python3 tests/check_browser_redirect.py
+      - name: Verify desktop-first Discord escalation timing and races (offline)
+        run: python3 tests/check_escalation.py
+      - name: Verify tutoring allowance and restricted gateway (offline)
+        run: python3 tests/check_weekly_budget.py && python3 tests/check_luna_gateway.py && python3 tests/check_tutor_setup.py
+      - name: Verify local lessons, progression and private parent writing review
+        run: python3 tests/check_local_lessons.py
