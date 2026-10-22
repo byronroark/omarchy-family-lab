@@ -27,6 +27,8 @@ _break_spec=importlib.util.spec_from_file_location('family_breaks',Path(__file__
 _break_module=importlib.util.module_from_spec(_break_spec);_break_spec.loader.exec_module(_break_module)
 _guard_spec=importlib.util.spec_from_file_location('family_guard',Path(__file__).with_name('family_guard.py'))
 _guard_module=importlib.util.module_from_spec(_guard_spec);_guard_spec.loader.exec_module(_guard_module)
+_bedtime_spec=importlib.util.spec_from_file_location('family_bedtime',Path(__file__).with_name('family_bedtime.py'))
+_bedtime_module=importlib.util.module_from_spec(_bedtime_spec);_bedtime_spec.loader.exec_module(_bedtime_module)
 
 ETC = Path('/etc/family-lab')
 DATA = Path('/var/lib/family-lab')
@@ -41,7 +43,7 @@ def guard_ready(etc=ETC):
     if not path.exists():return False
     try:
         marker=read(path)
-        paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
+        paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/libexec/family_bedtime.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
         return set(marker)=={'boot','accepted','hashes'} and marker['hashes']=={name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in paths}
     except (OSError,ValueError,TypeError):return False
 
@@ -309,6 +311,7 @@ class Engine:
         self.finishes = FinishEpisodes(data / 'finish.json')
         self.breaks = _break_module.Breaks(data/'breaks.json',read,atomic)
         self.guards = _guard_module.Guards(self.config)
+        self.bedtime_power = _bedtime_module.Bedtime(data/'bedtime-power.json',read,atomic,etc/'hibernate-ready')
         self.time_help=read(data/'time-help.json') if (data/'time-help.json').exists() else {}
         if not isinstance(self.time_help,dict) or len(self.time_help)>32:raise ValueError('Invalid time-help queue')
         for key,item in self.time_help.items():
@@ -407,9 +410,14 @@ class Engine:
                 if result['peer']==peer and result['boot']==self.boot:
                     result['release_checked']=True;atomic(receipt,result)
             return {'allowed':allowed}
-        if req.get('op')=='guard-get' and set(req)=={'op'}:
+        if req.get('op')=='guard-hibernate' and set(req)=={'op','episode'}:
+            row=self.status[peer]
+            if not row['blocked'] or row['reason']!='outside-hours' or row['mode']!='enforce':raise ValueError('Bedtime is no longer active')
+            return self.bedtime_power.request(peer,req['episode'],boottime())
+        if req.get('op') in ('guard-get','guard-get-secure') and set(req)=={'op'}:
+            if req['op']=='guard-get-secure':self.bedtime_power.protected(peer,boottime())
             state=self.breaks.view(peer,time.time(),self.boot,boottime());row=self.status[peer]
-            return dict(state,healthy=True,blocked=row['blocked'],reason=row['reason'],next_allowed=row['next_allowed'],helpers=sorted(self.config.get('parent_helpers',{})))
+            return dict(state,hibernate=self.bedtime_power.view(peer,boottime()),healthy=True,blocked=row['blocked'],reason=row['reason'],next_allowed=row['next_allowed'],helpers=sorted(self.config.get('parent_helpers',{})))
         if req.get('op')=='guard-protected' and set(req)=={'op','episode'}:
             result=self.breaks.protected(peer,req['episode'],time.time(),self.boot,boottime())
             if self.guard_trial is not None and self.guard_trial['peer']==peer:
@@ -428,6 +436,14 @@ class Engine:
             if not isinstance(req, dict):
                 raise ValueError('Expected operation object')
             op = req.get('op')
+            if op=='accept-hibernate' and set(req)=={'op','peer'}:
+                if uid!=0:raise PermissionError('Hibernation acceptance requires the local administrator')
+                peer=identifier(req['peer'])
+                if len(self.config['subjects'])!=1 or peer not in self.config['subjects'] or self.config.get('time_models',{}).get(peer)!='protected-breaks':raise ValueError('Hibernation requires a dedicated single-learner protected-breaks PC')
+                if not guard_ready(self.etc) or not hibernation_capability()['available']:raise ValueError('Verify the installed guard and hardware sleep/resume before accepting hibernation')
+                atomic(self.etc/'hibernate-ready',{'peer':peer,'resume_verified':True},0o600)
+                self.audit(who,op,{'peer':peer})
+                return {'accepted':peer,'note':'Administrator confirms a real protected hibernate/resume test passed.'}
             if op=='guard-active' and set(req)=={'op'}:
                 if uid!=0:raise PermissionError('Guard process inspection requires the local administrator')
                 return {'active':any(self.guards.covering(peer) for peer in self.guards.processes)}
@@ -435,7 +451,7 @@ class Engine:
                 if uid!=0:raise PermissionError('Guard acceptance requires the local administrator')
                 result=read(self.data/'guard-trial-result.json')
                 if result['peer']!=req['peer'] or result['boot']!=self.boot or not result['protected'] or not result['release_checked'] or not 0<=time.time()-result['time']<=3600 or not (self.etc/'pam-ready').exists():raise ValueError('Complete and verify a protected guard trial first')
-                paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
+                paths=('/usr/local/libexec/family-lab-policy','/usr/local/libexec/family_breaks.py','/usr/local/libexec/family_guard.py','/usr/local/libexec/family_bedtime.py','/usr/local/share/family-lab/guard/shell.qml','/usr/local/share/family-lab/guard/Dino/BreakCard.qml')
                 atomic(self.etc/'guard-ready',{'boot':self.boot,'accepted':time.time(),'hashes':{name:hashlib.sha256(Path(name).read_bytes()).hexdigest() for name in paths}},0o644)
                 self.audit(who,op,{'peer':req['peer']})
                 return {'accepted':req['peer']}
@@ -626,6 +642,7 @@ class Engine:
                     self.breaks.commit(state);atomic(self.data/'guard-trial-result.json',{'peer':peer,'boot':self.boot,'time':now,'protected':trial['protected'],'release_checked':False});atomic(self.data/'guard-trial.json',None);self.guard_trial=None
                     self.audit('service','guard-trial-ended',{'peer':peer})
                 else:result[peer].update(mode='enforce',blocked=True,reason='break',break_status=view,guard_test=True,**{'break':view})
+            self.bedtime_power.sync(result,self.boot,elapsed,monotonic)
             self.finishes.sync({peer for peer,row in result.items() if row['blocked']}, now, self.boot, elapsed)
             # Retain 30 daily totals; detailed browsing/application data is never collected here.
             for old in sorted(self.state['days'])[:-30]:
@@ -650,6 +667,7 @@ class Engine:
                 return
             self.guards.sync(status)
             for peer, state in status.items():
+                self.bedtime_power.enforce(peer,state,boottime(),self.audit)
                 # Break policies must never fall through to the legacy logout path.
                 if self.config.get('time_models',{}).get(peer)=='protected-breaks' or self.current['policy']['subjects'][peer].get('breaks',{}).get('enabled'):continue
                 if state['mode'] == 'enforce' and state['blocked'] and state['grace_seconds'] == 0 and state['logged_in'] and time.monotonic()-self.last_terminated.get(peer, -1000) > 10:
@@ -912,6 +930,10 @@ def main(args):
         print(json.dumps(client({'op':'guard-protected','episode':args[2]},LEARNER_SOCKET)))
     elif len(args)==7 and args[:2]==['guard','ask']:
         print(json.dumps(client({'op':'guard-ask','helper':args[2],'change':args[3],'minutes':int(args[4]),'episode':args[5],'revision':int(args[6])},LEARNER_SOCKET)))
+    elif args == ['guard','get-secure']:
+        print(json.dumps(client({'op':'guard-get-secure'},LEARNER_SOCKET)))
+    elif len(args)==3 and args[:2]==['guard','hibernate']:
+        print(json.dumps(client({'op':'guard-hibernate','episode':args[2]},LEARNER_SOCKET)))
     elif args == ['status']:
         print(json.dumps(read(RUNTIME/'status.json'), indent=2, ensure_ascii=False))
     elif args and args[0] == 'local' and os.geteuid() == 0:

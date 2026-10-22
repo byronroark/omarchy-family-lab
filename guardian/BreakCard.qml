@@ -6,6 +6,7 @@ Rectangle {
     id: card
     required property var state
     signal requestChange(string helper, string change, int minutes)
+    signal hibernateNow()
     color: "#18231f"
     implicitWidth: 700
     implicitHeight: content.implicitHeight + 48
@@ -21,6 +22,23 @@ Rectangle {
             color: "#80c7a3"; font.pixelSize: 38; Layout.alignment: Qt.AlignHCenter
         }
         Label { text: "Your work stays open. Asking a parent does not pause the break."; color: "#b0c4b8"; wrapMode: Text.WordWrap; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter }
+        Label {
+            visible: card.state.reason === "outside-hours"
+            text: card.state.hibernate && card.state.hibernate.enabled
+                ? "Hibernating in " + Math.floor(card.state.hibernate.remaining_seconds / 60) + ":" + (card.state.hibernate.remaining_seconds % 60 < 10 ? "0" : "") + card.state.hibernate.remaining_seconds % 60
+                : "Your work stays protected while hibernation is being set up."
+            color: "#80c7a3"; Layout.alignment: Qt.AlignHCenter
+        }
+        Button {
+            text: "Hibernate now"; visible: card.state.reason === "outside-hours"
+            enabled: !!(card.state.healthy && card.state.blocked && card.state.hibernate && card.state.hibernate.enabled)
+            Layout.alignment: Qt.AlignHCenter; onClicked: card.hibernateNow()
+        }
+        Label {
+            visible: card.state.reason === "outside-hours" && !!(card.state.hibernate && card.state.hibernate.error)
+            text: card.state.hibernate ? card.state.hibernate.error || "" : ""
+            color: "#b0c4b8"; wrapMode: Text.WordWrap; Layout.fillWidth: true
+        }
         ComboBox { id: change; visible: card.state.reason !== "outside-hours"; model: ["Skip this break", "Shorten by 5 minutes", "Extend by 5 minutes"]; Layout.alignment: Qt.AlignHCenter }
         RowLayout {
             Layout.alignment: Qt.AlignHCenter

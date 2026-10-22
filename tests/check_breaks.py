@@ -111,6 +111,22 @@ class EngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.engine.learner_request(959,{'op':'guard-release'})
         self.engine.tick({2101},self.now,65,100)
         self.assertTrue(self.engine.learner_request(959,{'op':'guard-release'})['allowed'])
+    def test_hibernate_requires_guard_identity_current_bedtime_and_verified_resume(self):
+        for uid in (2101,2102,9999):
+            with self.assertRaises((ValueError,PermissionError)):
+                self.engine.learner_request(uid,{'op':'guard-hibernate','episode':'old'})
+        with self.assertRaises(ValueError):self.engine.learner_request(959,{'op':'guard-hibernate','episode':'old'})
+        self.now+=12*3600
+        self.engine.current['policy']['subjects']['child']['mode']='enforce'
+        self.engine.tick({2101},self.now,70,100)
+        with self.assertRaises(ValueError):self.engine.learner_request(959,{'op':'guard-hibernate','episode':'old'})
+        with patch.object(self.engine.bedtime_power,'ready',return_value=True):
+            self.engine.tick({2101},self.now,80,100)
+            state=self.engine.learner_request(959,{'op':'guard-get-secure'})
+            episode=state['hibernate']['episode']
+            self.assertTrue(self.engine.learner_request(959,{'op':'guard-hibernate','episode':episode})['accepted'])
+        with patch.object(self.engine.bedtime_power,'ready',return_value=False):
+            with self.assertRaises(ValueError):self.engine.learner_request(959,{'op':'guard-hibernate','episode':episode})
     def test_enforcement_gate_and_no_legacy_logout(self):
         candidate=copy.deepcopy(self.engine.current['policy']);candidate['subjects']['child']['mode']='enforce'
         (self.home/'etc/pam-ready').touch()
