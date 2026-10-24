@@ -5,6 +5,15 @@ from unittest.mock import patch
 ROOT=pathlib.Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT/'assistance'))
 import family_policy_client as client
 class WidgetTests(unittest.TestCase):
+    def test_minutes_parse_visible_text_and_reject_invalid_or_out_of_range_values(self):
+        tree=ast.parse((ROOT/'assistance/family-time-widget').read_text())
+        method=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='whole_minutes')
+        namespace={};exec(compile(ast.Module(body=[method],type_ignores=[]),'<minute parser>','exec'),namespace)
+        parse=namespace['whole_minutes']
+        self.assertEqual(parse('70',1,240),70);self.assertEqual(parse(' 15 ',1,120),15)
+        for value in ('','0','241','70.5','-1','nan','7e1','999999999999999999999','７０'):
+            with self.assertRaises(ValueError):parse(value,1,240)
+        with self.assertRaises(ValueError):parse('121',1,120)
     def methods(self):
         tree=ast.parse((ROOT/'assistance/family-help-widget').read_text())
         return [node for cls in tree.body if isinstance(cls,ast.ClassDef) for node in cls.body if isinstance(node,ast.FunctionDef) and node.name in ('build_parent','build_break','decide_break')]

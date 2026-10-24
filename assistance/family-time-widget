@@ -24,6 +24,35 @@ def theme_css(home=None):
     .family-time selection { background: #2a4252; color: #edf6ff; }
     """,home)
 
+def whole_minutes(text,minimum,maximum):
+    text=text.strip()
+    if not text.isascii() or not text.isdigit() or len(text)>3 or not minimum<=int(text)<=maximum:
+        raise ValueError('Enter whole minutes between '+str(minimum)+' and '+str(maximum)+'.')
+    return int(text)
+
+class MinutesField(Gtk.Box):
+    """Plain numeric entry: scrolling the page cannot increment this setting."""
+    def __init__(self,minimum,maximum,value):
+        super().__init__(spacing=6)
+        self.minimum,self.maximum=minimum,maximum
+        self.entry=Gtk.Entry(hexpand=True,input_purpose=Gtk.InputPurpose.DIGITS)
+        self.entry.set_tooltip_text('Type minutes, or use the minus/plus buttons. Changes need Apply.')
+        self.append(self.entry)
+        self.entry.connect('changed',lambda *_:self.entry.remove_css_class('error'))
+        for label,step in [('−',-5),('+',5)]:
+            button=Gtk.Button(label=label,width_request=42)
+            button.connect('clicked',lambda *_,step=step:self.step(step))
+            self.append(button)
+        self.set_value(value)
+    def set_value(self,value):
+        self.entry.set_text(str(value))
+    def get_value_as_int(self):
+        # Parse the visible text directly, including text not yet focus-committed.
+        return whole_minutes(self.entry.get_text(),self.minimum,self.maximum)
+    def step(self,delta):
+        try:self.set_value(max(self.minimum,min(self.maximum,self.get_value_as_int()+delta)))
+        except ValueError:self.entry.add_css_class('error')
+
 class App(Gtk.Application):
     def __init__(self):
         super().__init__(application_id='org.familylab.ParentTime');self.connect('activate',self.activate);self.config=helper_config();self.busy=False;self.controls=[]
@@ -87,6 +116,8 @@ class App(Gtk.Application):
         self.label(subject['name']+' · revision '+str(data['revision']))
         state=data['status'].get(peer,{})
         self.label('Mode: '+subject['mode']+' | timezone: '+data['policy']['timezone'])
+        saved=subject.get('breaks',{})
+        self.label('Saved on child PC: '+str(saved['use_minutes'])+' min use / '+str(saved['break_minutes'])+' min break' if saved else 'Break settings not saved yet; editable defaults shown below.')
         self.label(f"Used today: {state.get('used_seconds',0)//60} min | Until next break: {state.get('remaining_seconds',0)//60} min")
         if state.get('reason'):self.label('Current restriction: '+state['reason'])
         if state.get('next_allowed'):self.label('Next access: '+str(state['next_allowed']))
@@ -94,9 +125,9 @@ class App(Gtk.Application):
         self.label('BREAKS  /  Work stays open · Bedtime is separate')
         if not data.get('capabilities',{}).get('protected_break_guard'):self.label('Enforcement awaits live Dino acceptance.')
         self.label('Computer use before a break (minutes)')
-        self.use=Gtk.SpinButton.new_with_range(1,240,5);self.use.set_value(subject.get('breaks',{}).get('use_minutes',60));self.box.append(self.use);self.controls.append(self.use)
+        self.use=MinutesField(1,240,saved.get('use_minutes',60));self.box.append(self.use);self.controls.append(self.use)
         self.label('Break duration (minutes)')
-        self.rest=Gtk.SpinButton.new_with_range(1,120,5);self.rest.set_value(subject.get('breaks',{}).get('break_minutes',15));self.box.append(self.rest);self.controls.append(self.rest)
+        self.rest=MinutesField(1,120,saved.get('break_minutes',15));self.box.append(self.rest);self.controls.append(self.rest)
         self.fields={}
         for day in DAYS:
             row=Gtk.Box(spacing=8);self.box.append(row);row.append(Gtk.Label(label=day.title(),width_chars=4))
