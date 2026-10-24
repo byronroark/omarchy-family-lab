@@ -16,6 +16,11 @@ class WidgetTests(unittest.TestCase):
         source=(ROOT/'assistance/family-time-widget').read_text()
         self.assertIn('layout.append(scroll);layout.append(self.feedback);layout.append(self.footer)',source)
         self.assertIn("self.apply,self.footer",source)
+    def test_feedback_is_mirrored_in_a_fixed_top_banner(self):
+        source=(ROOT/'assistance/family-time-widget').read_text()
+        self.assertIn("self.feedback.bind_property('label',self.top_feedback,'label',GObject.BindingFlags.SYNC_CREATE)",source)
+        self.assertLess(source.index('layout.append(self.top_feedback)'),source.index('layout.append(scroll)'))
+
     def test_schedule_save_reads_fresh_state_and_confirms(self):
         tree=ast.parse((ROOT/'assistance/family-time-widget').read_text())
         method=next(n for cls in tree.body if isinstance(cls,ast.ClassDef) for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='operation')

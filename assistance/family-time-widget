@@ -4,7 +4,7 @@ import copy,threading,datetime as dt
 from zoneinfo import ZoneInfo
 import gi
 gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
-from gi.repository import Gtk,Gdk,GLib
+from gi.repository import Gtk,Gdk,GLib,GObject
 from family_identity import helper_config
 from family_policy_client import request,report
 from family_theme import themed_css
@@ -48,6 +48,10 @@ class App(Gtk.Application):
         self.footer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8);self.footer.add_css_class('footer')
         self.feedback=Gtk.Label(label='Connecting to the policy service…',xalign=0,wrap=True,margin_start=16,margin_end=16,margin_top=8,margin_bottom=8)
         self.feedback.add_css_class('feedback')
+        self.top_feedback=Gtk.Label(xalign=0,wrap=True,margin_start=20,margin_end=20,margin_top=12,margin_bottom=8)
+        self.top_feedback.add_css_class('feedback')
+        self.feedback.bind_property('label',self.top_feedback,'label',GObject.BindingFlags.SYNC_CREATE)
+        layout.append(self.top_feedback)
         layout.append(scroll);layout.append(self.feedback);layout.append(self.footer);self.win.set_child(layout)
         self.win.present();self.refresh()
     def run_task(self,work,done,quiet=False):
