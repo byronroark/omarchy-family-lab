@@ -44,7 +44,7 @@ def public_key(value):
     if len(raw)!=51 or raw[:19]!=b'\0\0\0\x0bssh-ed25519\0\0\0\x20':raise ValueError('Malformed Ed25519 key')
     return ' '.join(parts[:2])
 def validate(profile):
-    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar','helper','other_parent','approval_scope','policy_public_key','controls_timezone'}
+    allowed={'schema_version','learner','admin','dad','mom','public_keys','host_key','host_fingerprint','bar','helper','other_parent','approval_scope','policy_public_key','controls_timezone','tutor','enroll_controls'}
     if not isinstance(profile,dict) or set(profile)-allowed or type(profile.get('schema_version')) is not int or profile.get('schema_version')!=1:raise ValueError('Unsupported setup profile')
     for role in ('learner','admin'):
         if not isinstance(profile.get(role),dict):raise ValueError('Missing role: '+role)
@@ -88,6 +88,9 @@ def validate(profile):
     if 'controls_timezone' in profile:
         from zoneinfo import ZoneInfo
         ZoneInfo(profile['controls_timezone'])
+    if type(profile.get('enroll_controls',False)) is not bool:raise ValueError('enroll_controls must be a boolean')
+    if profile.get('enroll_controls') and len(plain(helper.get('id')))>20:raise ValueError('Controls parent ID must have at most 20 characters')
+    runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['validate'](profile)
     if profile.get('host_key'):public_key(profile['host_key'])
     return profile
 
@@ -130,6 +133,9 @@ def prompt_profile():
         profile['approval_scope']['packages']=[value.strip() for value in extra.split(',') if value.strip()]
         print('A technical administrator must review this delegated app scope on the child PC. Existing technical access is kept; updates/manual actions are not delegated.')
     profile['host_fingerprint']=ask('Child Ed25519 SHA256 fingerprint verified at its physical console (required before helper apply)')
+    profile['enroll_controls']=ask('Include break and bedtime approval controls? yes / no','yes').lower()=='yes'
+    if ask('Include Family Learning and personal parent AI course authoring? yes / no','yes').lower()=='yes':
+        profile['tutor']={'enabled':True,'port':3785,'parent_login':ask('Your separate DeepTutor parent login',kind),'firewall':True}
     return validate(profile)
 
 def run(command,**kwargs):return subprocess.run(command,check=True,**kwargs)
@@ -390,6 +396,12 @@ def helper_files(profile,home,identity,keys):
     if capability(profile)=='approver':
         helper_settings={key:value for key,value in helper_settings.items() if key not in ('poll_alias','view_alias','control_alias','admin_alias')}
     if delegated(profile):helper_settings.update(approval_alias=alias,quick_approval=selected_helper(profile).get('quick_approval',False))
+    if profile.get('policy_public_key'):
+        identifier=selected_helper(profile)['id'];alias_policy='family-'+learner['id']+'-policy-'+identifier
+        policy_key=home/'.ssh'/('family-policy-'+learner['id'])/(identifier+'-ed25519')
+        policy_lines=['Host '+alias_policy,'    HostName '+learner['host'],'    Port '+str(learner['port']),'    User flpolicy-'+identifier,'    IdentityFile '+ssh_value(str(policy_key)),'    UserKnownHostsFile '+ssh_value(str(known)),'    GlobalKnownHostsFile /dev/null','    StrictHostKeyChecking yes','    IdentitiesOnly yes','    IdentityAgent none','    ForwardAgent no','    ClearAllForwardings yes','    ControlMaster no','    ControlPath none','    PermitLocalCommand no','    RequestTTY no','    BatchMode yes']
+        lines='\n'.join(lines).rstrip().split('\n')+['# BEGIN family-policy '+identifier]+policy_lines+['# END family-policy '+identifier,'']
+        helper_settings.update(policy_alias=alias_policy,policy_peer=learner['id'])
     result={}
     for name in ('family-help-dad','family-help-widget','family_help_image.py','family_identity.py','family_theme.py','family_approval.py','family_approval_client.py','family_software.py','family_menu.py','family-menu-catalog.json'):
         result['.local/bin/'+name]=((ROOT/'assistance'/name).read_bytes(),0o644 if name.endswith(('.py','.json')) else 0o755,False)
@@ -410,6 +422,7 @@ NoNewPrivileges=yes
 WantedBy=graphical-session.target
 ''').encode(),0o644,False)
     result['.config/systemd/user/graphical-session.target.wants/family-help-watch.service']=(str(home/'.config/systemd/user/family-help-watch.service'),0o777,True)
+    result.update(runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['helper_files'](profile,home))
     return result
 
 def apply_helper(profile,args):
@@ -436,6 +449,11 @@ def apply_helper(profile,args):
     except BaseException:tx.rollback();raise
     private_write(pathlib.Path(args.profile),encoded(profile))
     if pathlib.Path(args.profile)!=existing:private_write(existing,encoded(profile))
+    if profile.get('enroll_controls'):
+        runpy.run_path(str(ROOT/'setup/policy_setup.py'))['enroll_helper'](globals(),profile,args)
+        private_write(pathlib.Path(args.profile),encoded(profile))
+        if pathlib.Path(args.profile)!=existing:private_write(existing,encoded(profile))
+    if profile.get('tutor',{}).get('enabled'):print('After learner enrollment, open Family Learning and Connect my tutoring AI from the app launcher. Personal AI sign-in must be completed privately.')
     print('Helper enrolled; dedicated role keys remain on this helper. Root/parent key was not exported. Files changed:',len(tx.changes))
     print('Next: create the public-key enrollment bundle and install it through the separate administrator on the learner PC.')
 
@@ -525,6 +543,8 @@ def main():
         print('Read-only enrollment plan:')
         print(json.dumps({'learner':profile['learner'],'helper':selected_helper(profile),'other_parent':profile.get('other_parent',profile.get('mom',{'enabled':False}))},indent=2))
         print('Capability:',capability(profile))
+        if profile.get('enroll_controls'):print('Enroll independent break/bedtime credentials; preserve the existing learner policy.')
+        if profile.get('tutor',{}).get('enabled'):print('DeepTutor parent:',profile['tutor']['parent_login'],'at',runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['address'](profile),'; existing host required; private account/password setup; scoped SSH/browser firewall rules; separate personal AI sign-in.')
         if capability(profile)=='technical' and delegated(profile):print('Quick approvals enabled for explicitly reviewed scope:',json.dumps(profile['approval_scope']))
         print('Administrator:',profile['admin']['login'])
         if capability(profile)=='approver':
@@ -533,7 +553,7 @@ def main():
             return
         print('Helper: encrypted administrator key stays local; pin host key; create independent forced poll/view/consent keys; install desktop watcher.')
         print('Learner: require standard child + existing administrator; add locked read-only system viewer; root-owned approval/migration helpers; child-owned menus, widget and optional top-right icon.')
-        print('Never: give child sudo, run arbitrary child commands as root, activate experimental parental policy, enroll a second helper, upgrade packages, reboot, change firewall or enable helper SSH.')
+        print('Never: give child sudo, run arbitrary child commands as root, activate experimental parental policy, enroll a second helper, upgrade packages, reboot or enable helper SSH. Optional tutoring enrollment adds only reviewed parent-source SSH/browser firewall rules.')
         return
     if args.command=='apply':
         if args.role=='helper':apply_helper(profile,args)
@@ -542,11 +562,19 @@ def main():
             if local!=public_key(profile.get('host_key','')) or fingerprint(local)!=profile.get('host_fingerprint'):raise ValueError('Enrollment bundle belongs to a different learner host')
             if args.approval_transport_only and not delegated(profile):raise ValueError('Approval transport requires an explicitly scoped enrollment')
             if capability(profile)=='technical' and not args.approval_transport_only:apply_learner(profile,args)
+            if profile.get('tutor',{}).get('enabled') and not args.approval_transport_only:runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['inspect_host'](profile)
             if delegated(profile):runpy.run_path(str(ROOT/'setup/approval_setup.py'))['install'](globals(),profile,args)
+            if not args.approval_transport_only:
+                if profile.get('enroll_controls'):
+                    module=runpy.run_path(str(ROOT/'setup/policy_setup.py'))
+                    module['install_parent' if pathlib.Path('/etc/family-lab/enrollment.json').exists() else 'install'](globals(),profile,args)
+                if profile.get('tutor',{}).get('enabled'):runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['install'](globals(),profile,args)
     elif args.command=='bundle':
         if not args.out:raise ValueError('bundle requires --out outside the repository')
         enrollment_bundle(profile,args.out)
-    else:verify(profile,args.role)
+    else:
+        verify(profile,args.role)
+        if profile.get('tutor',{}).get('enabled'):runpy.run_path(str(ROOT/'setup/tutor_setup.py'))['verify'](profile)
 if __name__=='__main__':
     try:main()
     except (OSError,ValueError,KeyError,subprocess.SubprocessError) as exc:sys.exit('Enrollment stopped: '+str(exc))
