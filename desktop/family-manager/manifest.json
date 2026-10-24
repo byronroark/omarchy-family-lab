@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "community.family-lab.manager",
+  "name": "Family Manager",
+  "version": "0.1.0",
+  "author": "Omarchy Family Lab contributors",
+  "description": "Open enrolled parent controls from the bar",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "FamilyManager.qml"
+  },
+  "barWidget": {
+    "displayName": "Family Manager",
+    "description": "Parent mode, breaks and bedtime controls",
+    "category": "Family",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
