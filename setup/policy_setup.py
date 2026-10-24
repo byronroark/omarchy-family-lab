@@ -25,6 +25,9 @@ def enroll_helper(api,profile,args):
     lines=['Host '+alias,'    HostName '+child['host'],'    Port '+str(child['port']),'    User flpolicy-'+identifier,'    IdentityFile '+api['ssh_value'](str(key)),'    UserKnownHostsFile '+api['ssh_value'](str(folder/'known_hosts')),'    GlobalKnownHostsFile /dev/null','    StrictHostKeyChecking yes','    IdentitiesOnly yes','    IdentityAgent none','    ForwardAgent no','    ClearAllForwardings yes','    ControlMaster no','    ControlPath none','    PermitLocalCommand no','    RequestTTY no','    BatchMode yes']
     config.update(policy_alias=alias,policy_peer=child['id'])
     tx=api['Files'](home,home/'.local/state/family-help-install/policy-helper.json',args.adopt_existing)
+    shell=home/'.config/omarchy/shell.json'
+    old_shell=shell.read_bytes() if args.activate and profile.get('bar',True) and shell.is_file() else None
+    if args.activate and profile.get('bar',True):api['private_path'](str(shell))
     try:
         for name in ('family_policy_client.py','family_integrations.py','family-time-widget','family-help-dad','family-help-widget','family_identity.py','family_theme.py'):
             tx.write('.local/bin/'+name,(api['ROOT']/'assistance'/name).read_bytes(),0o644 if name.endswith('.py') else 0o755)
@@ -41,8 +44,20 @@ def enroll_helper(api,profile,args):
             tx.write('.config/hypr/family-time.lua',(api['ROOT']/'desktop/family-time.lua').read_bytes())
             tx.write('.config/hypr/hyprland.lua',text.encode())
         tx.write('.local/share/applications/org.familylab.Time.desktop',('[Desktop Entry]\nType=Application\nName=Family breaks and bedtime\nExec="'+str(home/'.local/bin/family-time-widget')+'"\nIcon=preferences-system-time\nTerminal=false\nCategories=Settings;\n').encode(),0o644)
+        if profile.get('bar',True):
+            plugin=home/'.config/omarchy/plugins/community.family-lab.manager'
+            for name in ('manifest.json','FamilyManager.qml'):tx.write(str((plugin/name).relative_to(home)),(api['ROOT']/'desktop/family-manager'/name).read_bytes(),0o644)
+            if args.activate:
+                if old_shell is not None:api['private_write'](home/'.local/state/family-help-install/bar-backups'/('before-manager-'+tx.identifier+'.json'),old_shell)
+                api['run'](['/usr/bin/omarchy','plugin','validate',str(plugin)])
+                api['run'](['/usr/bin/omarchy','bar','put','community.family-lab.manager','--section','right'])
         tx.commit()
-    except BaseException:tx.rollback();raise
+    except BaseException:
+        tx.rollback()
+        if args.activate and profile.get('bar',True):
+            if old_shell is None:shell.unlink(missing_ok=True)
+            else:shell.write_bytes(old_shell)
+        raise
     api['private_write'](pathlib.Path(args.profile),api['encoded'](profile))
     if args.activate:api['run'](['/usr/bin/systemctl','--user','restart','family-help-watch.service'])
     print('Parent controls staged. Policy key is separate from approval, help and administrator credentials. Copy enrollment JSON through the existing administrator route.')
@@ -144,3 +159,58 @@ def install(api,profile,args):
         if subprocess.run(['/usr/bin/sshd','-t']).returncode==0:subprocess.run(['/usr/bin/systemctl','reload','sshd'])
         raise
     print('Controls enrolled. New policy is OFF, with 60-minute use / 15-minute break defaults. No guard acceptance marker or enforcement was enabled.')
+
+
+def parent_request(request):
+    import socket
+    with socket.socket(socket.AF_UNIX) as connection:
+        connection.settimeout(8)
+        connection.connect('/run/family-lab/policy.sock')
+        connection.sendall((json.dumps(request)+'\n').encode());connection.shutdown(socket.SHUT_WR)
+        raw=connection.makefile('rb').read(262145)
+        if len(raw)>262144:raise ValueError('Oversized policy response')
+        response=json.loads(raw)
+        if not response.get('ok'):raise ValueError(response.get('error','Policy request failed'))
+        return response['result']
+
+
+def install_parent(api,profile,args):
+    """Add a parent to an existing policy without altering enforcement or guards."""
+    if os.geteuid()!=0:raise ValueError('Use the separate technical administrator')
+    if not parent_request({'op':'get'}).get('capabilities',{}).get('parent_enrollment_reload'):
+        raise ValueError('Upgrade the child policy service during a reviewed maintenance window before adding a controls parent; existing enforcement was not changed')
+    helper=api['selected_helper'](profile);identifier=api['plain'](helper['id']);peer=profile['learner']['id']
+    path=pathlib.Path('/etc/family-lab/enrollment.json');api['trusted_system_file'](path)
+    config=json.loads(path.read_text());child=pwd.getpwnam(profile['learner']['login'])
+    subject=config.get('subjects',{}).get(peer)
+    if not subject or subject['uid']!=child.pw_uid:raise ValueError('Existing learner controls must match this enrollment')
+    user=account(api,'flpolicy-'+identifier,'/var/lib/family-policy/'+identifier,'family-lab-parents')
+    if user.pw_uid in {child.pw_uid,pwd.getpwnam(profile['admin']['login']).pw_uid} or str(user.pw_uid) in config.get('guards',{}):raise ValueError('Parent identity must be separate')
+    if any(row['uid']==user.pw_uid for row in config['subjects'].values()):raise ValueError('Parent cannot be a learner')
+    parents=config.setdefault('parents',{});routes=config.setdefault('parent_helpers',{})
+    if str(user.pw_uid) in parents and parents[str(user.pw_uid)]!=helper['label']:raise ValueError('Parent identity is enrolled differently')
+    if helper['kind'] in routes and routes[helper['kind']]!=user.pw_uid:raise ValueError('Parent button is already enrolled differently')
+    parents[str(user.pw_uid)]=helper['label'];routes[helper['kind']]=user.pw_uid
+    key_path='/etc/family-lab/parents/'+identifier+'.keys';api['ensure_directory']('/etc/family-lab/parents',0o755)
+    key='from="'+helper['host']+'",restrict '+api['public_key'](profile['policy_public_key'])+'\n'
+    ssh='Match User '+user.pw_name+'\n    AuthorizedKeysFile '+key_path+'\n    AuthorizedKeysCommand none\n    AuthenticationMethods publickey\n    PasswordAuthentication no\n    KbdInteractiveAuthentication no\n    DisableForwarding yes\n    PermitTTY no\n    PermitUserRC no\n    ForceCommand /usr/local/libexec/family-lab-policy remote\nMatch all\n'
+    # This transaction owns only the new parent's credentials plus a reviewed
+    # merge of root-owned enrollment metadata. No policy/runtime/guard files.
+    tx=api['Files']('/', '/var/lib/family-help-install/policy-parent-'+identifier+'.json',True)
+    try:
+        tx.write('/etc/family-lab/enrollment.json',api['encoded'](config),0o644)
+        tx.write(key_path,key.encode(),0o644)
+        tx.write('/etc/ssh/sshd_config.d/42-family-policy-'+identifier+'.conf',ssh.encode(),0o644)
+        api['run'](['/usr/bin/sshd','-t'])
+        effective=api['run'](['/usr/bin/sshd','-T','-C','user='+user.pw_name+',host=localhost,addr='+helper['host']],capture_output=True,text=True).stdout
+        settings=dict(line.split(' ',1) for line in effective.splitlines() if ' ' in line)
+        if settings.get('forcecommand')!='/usr/local/libexec/family-lab-policy remote' or settings.get('disableforwarding')!='yes' or settings.get('passwordauthentication')!='no':raise ValueError('Parent SSH restrictions were not effective')
+        api['run'](['/usr/bin/systemctl','reload','sshd'])
+        parent_request({'op':'reload-parents'});tx.commit()
+    except BaseException:
+        tx.rollback()
+        try:parent_request({'op':'reload-parents'})
+        except (OSError,ValueError):pass
+        if subprocess.run(['/usr/bin/sshd','-t']).returncode==0:subprocess.run(['/usr/bin/systemctl','reload','sshd'])
+        raise
+    print('Additional controls parent enrolled. Existing schedule, enforcement, guard and hibernation configuration were not changed.')
