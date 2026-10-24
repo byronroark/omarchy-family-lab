@@ -30,6 +30,26 @@ class PolicyTests(unittest.TestCase):
         m.atomic(self.data/'policy.json',{'revision':0,'policy':m.defaults(self.cfg['subjects'])})
         self.engine=m.Engine(self.etc,self.data,self.runtime)
         self.now=1767607200.0 # 2026-01-05 10:00 UTC
+    def test_parent_reload_preserves_policy_guard_and_usage(self):
+        policy=copy.deepcopy(self.engine.current);state=copy.deepcopy(self.engine.state)
+        guards=self.engine.guards
+        updated=copy.deepcopy(self.cfg);updated['parents']['2104']='Guardian';updated['parent_helpers']={'parent':2104}
+        m.atomic(self.etc/'enrollment.json',updated)
+        with self.assertRaises(PermissionError):self.engine.request(2102,{'op':'reload-parents'})
+        self.assertEqual(self.engine.request(0,{'op':'reload-parents'}),{'reloaded':True})
+        self.assertEqual(self.engine.config['parent_helpers'],{'parent':2104})
+        self.assertIs(self.engine.guards,guards)
+        self.assertEqual(self.engine.current,policy);self.assertEqual(self.engine.state,state)
+        self.assertEqual(self.engine.request(2104,{'op':'get'})['revision'],0)
+
+    def test_parent_reload_rejects_subject_changes_and_child_identity(self):
+        updated=copy.deepcopy(self.cfg);updated['subjects']['alex']['uid']=999
+        m.atomic(self.etc/'enrollment.json',updated)
+        with self.assertRaises(ValueError):self.engine.request(0,{'op':'reload-parents'})
+        updated=copy.deepcopy(self.cfg);updated['parents']['2101']='Not a parent'
+        m.atomic(self.etc/'enrollment.json',updated)
+        with self.assertRaises(ValueError):self.engine.request(0,{'op':'reload-parents'})
+
     def rejected(self,req,uid=2102):
         with self.assertRaises((ValueError,PermissionError,KeyError)):
             self.engine.request(uid,req)

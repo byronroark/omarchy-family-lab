@@ -46,7 +46,7 @@ Each learner uses a generic configured peer ID such as `learner-a`. Multiple lea
 6. For inline buttons and desktop theme integration, follow [INLINE_UI.md](docs/INLINE_UI.md).
 7. Check [verification status](docs/VERIFICATION.md) before relying on any capability.
 
-The original user installer does not require root and does not change SSH policy. The opt-in master enrollment separately uses private parent authentication to install root helpers and a locked forced-viewer system account/SSH Match rule; it does not create human accounts, grant child sudo, upgrade packages, reboot or change the firewall. No default keyboard shortcuts or monitor layouts are changed.
+The original user installer does not require root and does not change SSH policy. The opt-in master enrollment separately uses private parent authentication to install root helpers and a locked forced-viewer system account/SSH Match rule; it does not create human accounts, grant child sudo, upgrade packages, reboot or change the firewall unless the separate optional tutoring enrollment is selected. No default keyboard shortcuts or monitor layouts are changed.
 
 **Control remains opt-in.** Notifications and forwarding never approve control; opening the terminal from either path is read-only. Helper requests control with `family-lab assist learner-a`; learner approves locally with `family-lab allow-control`. Ctrl+B then Ctrl+R revokes control without ending the learning session. Control gives a trusted helper the learning account’s shell capabilities; it is not a sandbox.
 
@@ -98,3 +98,7 @@ enrolled ActivityWatch user target through the report role and the selected lear
 AdGuard domain-protection settings through verified HTTPS. Controls stay disabled
 until the required services, permissions and private parent credentials are enrolled.
 See the integration guide for the expanded report-key capability and raw-data disclosure.
+
+### Complete additional-parent enrollment
+
+See [Family Manager and DeepTutor parent enrollment](docs/PARENT_TUTOR_ENROLLMENT.md) for approval-only Mom/Dad setup, independent break controls, direct tutoring access, scoped firewall rules, and private personal AI sign-in. This connects to an existing managed DeepTutor server; it does not install that server on the parent desktop.
