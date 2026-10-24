@@ -93,6 +93,12 @@ registers an existing HTTPS dashboard or generates a reviewed digest-pinned Comp
 file, without starting services or changing DNS. Both features remain off by default;
 real application installation and machine acceptance are separate steps.
 
+Family Manager's **Collection and filtering settings** panel can control an explicitly
+enrolled ActivityWatch user target through the report role and the selected learner's
+AdGuard domain-protection settings through verified HTTPS. Controls stay disabled
+until the required services, permissions and private parent credentials are enrolled.
+See the integration guide for the expanded report-key capability and raw-data disclosure.
+
 ### Complete additional-parent enrollment
 
 See [Family Manager and DeepTutor parent enrollment](docs/PARENT_TUTOR_ENROLLMENT.md) for approval-only Mom/Dad setup, independent break controls, direct tutoring access, scoped firewall rules, and private personal AI sign-in. This connects to an existing managed DeepTutor server; it does not install that server on the parent desktop.

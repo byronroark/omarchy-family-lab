@@ -159,9 +159,37 @@ def main(args):
             if not chunk:
                 break
         request = json.loads(raw)
+        if isinstance(request, dict) and request.get('op') in ('collection-status', 'collection-set'):
+            import importlib.util
+            module_path = Path(__file__).resolve().with_name('family_collection_control.py')
+            if not module_path.is_file():
+                module_path = Path(__file__).resolve().parents[1] / 'integrations/family_collection_control.py'
+            spec = importlib.util.spec_from_file_location('family_collection_control', module_path)
+            control = importlib.util.module_from_spec(spec); spec.loader.exec_module(control)
+            print(json.dumps(control.control(cfg(), request)))
+            return
         if not isinstance(request, dict) or set(request) != {'start', 'end'}:
             raise ValueError('Expected start/end dates only')
         print(render(request['start'], request['end']), end='')
+    elif cmd == 'control' and len(args) == 2:
+        peer, action = args
+        if action not in ('status', 'start', 'stop'):
+            raise ValueError('Use control PEER status/start/stop')
+        host = cfg().get('report_aliases', {}).get(peer)
+        if not isinstance(host, str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', host):
+            raise ValueError('No separately enrolled report SSH alias')
+        operation = {'op':'collection-status'} if action == 'status' else {
+            'op':'collection-set', 'enabled':action == 'start', 'acknowledge_raw_storage':action == 'start'}
+        # Start is an explicit acknowledgement action, not a background retry.
+        with tempfile.TemporaryFile() as output:
+            import resource
+            def limits(): resource.setrlimit(resource.RLIMIT_FSIZE, (16384, 16384))
+            subprocess.run(['ssh','-T','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=5',host],
+                input=json.dumps(operation).encode(), stdout=output, check=True, timeout=30, preexec_fn=limits)
+            output.seek(0); result=json.loads(output.read(16385))
+        if not isinstance(result, dict) or type(result.get('ready')) is not bool:
+            raise ValueError('Invalid collection-control response')
+        print(json.dumps(result))
     elif cmd == 'request' and len(args) == 3:
         peer, first, last = args
         date(first); date(last)
