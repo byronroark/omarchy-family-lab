@@ -444,6 +444,18 @@ class Engine:
                 atomic(self.etc/'hibernate-ready',{'peer':peer,'resume_verified':True},0o600)
                 self.audit(who,op,{'peer':peer})
                 return {'accepted':peer,'note':'Administrator confirms a real protected hibernate/resume test passed.'}
+            if op=='reload-parents' and set(req)=={'op'}:
+                if uid!=0:raise PermissionError('Parent enrollment reload requires the local administrator')
+                updated=read(self.etc/'enrollment.json')
+                baseline={key:value for key,value in self.config.items() if key not in ('parents','parent_helpers')}
+                candidate={key:value for key,value in updated.items() if key not in ('parents','parent_helpers')}
+                if candidate!=baseline:raise ValueError('Only parent enrollment may change without a policy upgrade')
+                parents=updated.get('parents',{});helpers=updated.get('parent_helpers',{})
+                if not isinstance(parents,dict) or not isinstance(helpers,dict) or any(not key.isdecimal() or int(key)<=0 or not isinstance(value,str) or not value for key,value in parents.items()):raise ValueError('Invalid parent enrollment')
+                blocked={str(row['uid']) for row in self.config['subjects'].values()}|set(self.config.get('guards',{}))
+                if set(parents)&blocked or any(kind not in ('dad','mom','parent') or type(uid) is not int or str(uid) not in parents for kind,uid in helpers.items()):raise ValueError('Parent identities must be separate')
+                self.config['parents']=parents;self.config['parent_helpers']=helpers
+                return {'reloaded':True}
             if op=='guard-active' and set(req)=={'op'}:
                 if uid!=0:raise PermissionError('Guard process inspection requires the local administrator')
                 return {'active':any(self.guards.covering(peer) for peer in self.guards.processes)}
@@ -489,7 +501,7 @@ class Engine:
                 return self.breaks.protected(req['peer'],req['episode'],time.time(),self.boot,boottime())
             if op == 'get' and set(req) == {'op'}:
                 return {'revision': self.current['revision'], 'policy': self.current['policy'], 'status': self.status,
-                        'capabilities':{'protected_break_guard':guard_ready(self.etc)},
+                        'capabilities':{'protected_break_guard':guard_ready(self.etc),'parent_enrollment_reload':True},
                         'browser_error': self.browser_error, 'healthy': self.last_success is not None and boottime()-self.last_success <= 20}
             if op == 'summary' and set(req) == {'op'}:
                 self.audit(who, 'summary', {})

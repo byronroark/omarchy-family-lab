@@ -56,7 +56,7 @@ class Enrollment(unittest.TestCase):
                 m.main()
                 self.assertEqual(base.call_count,0 if endpoint_only else 1);transport.assert_called_once()
     def test_new_technical_enrollment_includes_quick_approval_by_default(self):
-        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','','SHA256:'+('A'*43)])
+        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','','SHA256:'+('A'*43),'no','no'])
         prompts=[]
         def answer(prompt):prompts.append(prompt);return next(answers)
         with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=m.prompt_profile()
@@ -76,7 +76,7 @@ class Enrollment(unittest.TestCase):
         self.assertNotIn('.config/family-help/dad.json',helper)
         self.assertEqual(json.loads(files['/etc/family-help/teaching.json'][0])['admin'],'parent')
     def test_interactive_mom_profile_needs_no_dad(self):
-        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','',m.fingerprint(key(4))])
+        answers=iter(['mom','','technical','','','learner','','192.0.2.10','','parent','/not-read/admin-key','','192.0.2.20','','','',m.fingerprint(key(4)),'no','no'])
         prompts=[]
         def answer(prompt):prompts.append(prompt);return next(answers)
         with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=m.prompt_profile()
