@@ -46,6 +46,45 @@ def report(summary,peer,home=None):
     with os.fdopen(fd,'w') as output:output.write('\n'.join(lines)+'\n')
     return pathlib.Path(name)
 
+def activity_report(peer, home=None):
+    """Use the separately enrolled report role, never the parent-policy key."""
+    home = pathlib.Path.home() if home is None else pathlib.Path(home)
+    if not isinstance(peer,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',peer):
+        raise ValueError('Invalid learner report identity')
+    config = home/'.config/family-lab/config.json'
+    if not config.is_file() or not json.loads(config.read_text()).get('reporting',{}).get('report_aliases',{}).get(peer):
+        raise ValueError('Activity reporting is not enrolled yet. Set up ActivityWatch on the learner and a separate report-only SSH key on this parent PC.')
+    executable = home/'.local/bin/family-lab-report'
+    if not executable.is_file():raise ValueError('Install the optional Family Lab reporting adapter first')
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(2*1024*1024,2*1024*1024))
+        result=subprocess.run(['/usr/bin/python3',str(executable),'request',peer,today,today],stdout=output,stderr=errors,timeout=30,preexec_fn=limits)
+        if result.returncode:
+            raise ValueError('Activity report unavailable. Check the separate reporting enrollment, learner connection and ActivityWatch watchers. No empty report was fabricated.')
+        output.seek(0);value=output.read(4097)
+    if len(value)>4096:raise ValueError('Invalid activity report path')
+    path=pathlib.Path(value.decode().strip())
+    if path.parent.resolve()!=(home/'.local/state/family-lab/reporting').resolve() or path.suffix!='.md' or not path.is_file():
+        raise ValueError('Activity report was not saved in the private reporting directory')
+    return path
+
+def open_content_filter(home=None):
+    """Explicit user action opens upstream management; never handles its password."""
+    from urllib.parse import urlsplit
+    home=pathlib.Path.home() if home is None else pathlib.Path(home)
+    config=home/'.config/family-lab/config.json'
+    if not config.is_file():raise ValueError('Optional content filtering has not been configured on this parent PC')
+    backend=json.loads(config.read_text()).get('integrations',{}).get('adguard_home',{})
+    if backend.get('enabled') is not True or backend.get('provider')!='adguard-home':
+        raise ValueError('Optional AdGuard Home connection is disabled')
+    url=backend.get('management_url','');parsed=urlsplit(url)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Configure a verified HTTPS AdGuard Home URL without embedded credentials')
+    subprocess.run(['xdg-open',url],check=True,timeout=10)
+    return 'Opened AdGuard Home management. This does not confirm that client DNS or filtering is active.'
+
 def validate_card(data):
     if isinstance(data,dict) and 'policy_help' in data:
         if set(data)!={'id','time','message','topic','policy_help'} or data['topic']!='time-help' or not re.fullmatch('[a-f0-9]{32}',str(data['id'])) or not isinstance(data['policy_help'],dict) or set(data['policy_help'])!={'peer'} or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',str(data['policy_help']['peer'])):raise ValueError('Invalid time-help card')

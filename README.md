@@ -81,3 +81,14 @@ The [Dino flow prototype](docs/DINO_FLOW.md) adds a themed visual design, bounde
 The Dino preparation backend now persists finish episodes and exposes a UID-authenticated learner-only action socket. It does not extend the existing logout grace, wire the preview buttons, lock the session or perform hibernation. See [the authority integration limits](docs/DINO_FLOW.md#phase-two-persistent-authority-and-learner-channel) before testing.
 
 Protected work-preserving breaks and bedtime have a separate [enrollment and acceptance guide](docs/PROTECTED_BREAKS.md). New policies stay off until live acceptance.
+
+## Optional upstream activity and filtering integrations
+
+[Optional integration setup](docs/OPTIONAL_INTEGRATIONS.md) adds plan-by-default
+ActivityWatch reporting and AdGuard Home choices through `master-installation.sh features`.
+ActivityWatch's browser/window/idle streams produce domain-only estimated active-time
+reports through the existing report-only SSH role. Upstream ActivityWatch may retain
+raw URLs/titles locally; review that disclosure before enabling. AdGuard support currently
+registers an existing HTTPS dashboard or generates a reviewed digest-pinned Compose
+file, without starting services or changing DNS. Both features remain off by default;
+real application installation and machine acceptance are separate steps.
