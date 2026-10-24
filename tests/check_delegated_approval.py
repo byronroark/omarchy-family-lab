@@ -133,7 +133,7 @@ class DelegatedApproval(unittest.TestCase):
         with patch.object(pathlib.Path,'exists',return_value=False):self.assertEqual(actions.execute(self.request,planned),0)
         self.assertEqual(commands[0][0],['/usr/bin/pacman','-S','--needed','--noconfirm','--','extra/jq=1.8.1-1']);self.assertTrue(commands[0][1]['close_fds'])
     def test_approver_prompt_does_not_request_admin_identity(self):
-        answers=iter(['mom','','approver','','','learner','','192.0.2.10','','parent','','192.0.2.20','','','','SHA256:'+('A'*43)])
+        answers=iter(['mom','','approver','','','learner','','192.0.2.10','','parent','','192.0.2.20','','','','SHA256:'+('A'*43),'no','no'])
         prompts=[]
         def answer(prompt):prompts.append(prompt);return next(answers)
         with patch('builtins.input',side_effect=answer),patch.object(enroll.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):p=enroll.prompt_profile()

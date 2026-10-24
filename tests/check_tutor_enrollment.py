@@ -20,6 +20,17 @@ def parent_profile():
     return p
 
 class TutorEnrollment(unittest.TestCase):
+    def test_fresh_mom_wizard_combines_approver_controls_and_tutoring(self):
+        answers=iter(['mom','','approver','','','learner','','192.168.50.10','','parent','','192.168.50.20','','','','SHA256:'+('A'*43),'yes','yes','mom'])
+        prompts=[]
+        def answer(prompt):prompts.append(prompt);return next(answers)
+        with patch('builtins.input',side_effect=answer),patch.object(m.pwd,'getpwuid',return_value=types.SimpleNamespace(pw_name='helper')):
+            p=m.prompt_profile()
+        self.assertEqual(m.capability(p),'approver');self.assertTrue(p['enroll_controls'])
+        self.assertTrue(p['tutor']['enabled']);self.assertEqual(p['tutor']['parent_login'],'mom')
+        self.assertNotIn('identity_file',p['admin'])
+        self.assertFalse(any('private key' in prompt.lower() for prompt in prompts))
+
     def test_approval_only_and_tutor_parent_are_independent(self):
         p=parent_profile();m.validate(p)
         self.assertEqual(m.expected_keys(p),{'approval'})
