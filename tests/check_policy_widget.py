@@ -21,6 +21,12 @@ class WidgetTests(unittest.TestCase):
         self.assertIn("self.feedback.bind_property('label',self.top_feedback,'label',GObject.BindingFlags.SYNC_CREATE)",source)
         self.assertLess(source.index('layout.append(self.top_feedback)'),source.index('layout.append(scroll)'))
 
+    def test_retry_and_close_exist_before_first_connection(self):
+        source=(ROOT/'assistance/family-time-widget').read_text()
+        activate=source[source.index('    def activate('):source.index('    def run_task(')]
+        self.assertLess(activate.index("self.button('Retry connection'"),activate.index('self.win.present();self.refresh()'))
+        self.assertLess(activate.index("self.button('Close'"),activate.index('self.win.present();self.refresh()'))
+
     def test_schedule_save_reads_fresh_state_and_confirms(self):
         tree=ast.parse((ROOT/'assistance/family-time-widget').read_text())
         method=next(n for cls in tree.body if isinstance(cls,ast.ClassDef) for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='operation')

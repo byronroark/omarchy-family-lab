@@ -18,6 +18,15 @@ class ClientTests(unittest.TestCase):
         with patch.object(client.subprocess,'run',side_effect=error):
             with self.assertRaisesRegex(ValueError,'Settings changed'):
                 client.request({'op':'get'},{'policy_alias':'family-test','ssh_config':'/private/config'})
+    def test_unreachable_host_is_actionable_without_exposing_address(self):
+        error=subprocess.CalledProcessError(255,['ssh'],stderr=b'ssh: connect to host 192.0.2.10 port 22: No route to host')
+        with patch.object(client.subprocess,'run',side_effect=error):
+            with self.assertRaises(ValueError) as caught:
+                client.request({'op':'get'},{'policy_alias':'family-test','ssh_config':'/private/config'})
+        text=str(caught.exception)
+        self.assertIn('Wake it if asleep',text);self.assertIn('Retry connection',text)
+        self.assertNotIn('192.0.2.10',text);self.assertNotIn('/private/config',text)
+
     def test_private_report_and_empty_coverage_are_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             summary={'coverage':'No application or website observations','timezone':'America/New_York','days':{}}

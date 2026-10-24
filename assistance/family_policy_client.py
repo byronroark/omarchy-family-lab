@@ -20,7 +20,13 @@ def request(operation,config=None):
             detail=(exc.stderr or b'').decode(errors='replace').strip()
             prefix='Family Lab policy: '
             if detail.startswith(prefix):raise ValueError(detail[len(prefix):][:400]) from None
-            raise ValueError('Could not reach the policy service. Refresh to check the saved settings before retrying.') from None
+            if any(text in detail.lower() for text in ('no route to host','network is unreachable','connection timed out','operation timed out')):
+                raise ValueError('Child PC is unreachable. Wake it if asleep and check that both PCs are on the home network, then click Retry connection or Refresh. Any recent change is unconfirmed.') from None
+            if 'connection refused' in detail.lower():
+                raise ValueError('Child PC refused the connection. Check its SSH service, then retry. Any recent change is unconfirmed.') from None
+            if 'permission denied' in detail.lower():
+                raise ValueError('The policy connection was not authorized. Check the enrolled parent key and SSH agent, then retry.') from None
+            raise ValueError('Could not reach the policy service. Check the child PC and enrolled connection, then retry. Any recent change is unconfirmed.') from None
         output.seek(0);result=json.load(output)
     if not isinstance(result,dict):raise ValueError('Invalid policy response')
     if 'error' in result:raise ValueError(str(result['error'])[:500])

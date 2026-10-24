@@ -53,6 +53,8 @@ class App(Gtk.Application):
         self.feedback.bind_property('label',self.top_feedback,'label',GObject.BindingFlags.SYNC_CREATE)
         layout.append(self.top_feedback)
         layout.append(scroll);layout.append(self.feedback);layout.append(self.footer);self.win.set_child(layout)
+        self.button('Retry connection',self.refresh,self.footer).add_css_class('primary')
+        self.button('Close',self.win.close,self.footer)
         self.win.present();self.refresh()
     def run_task(self,work,done,quiet=False):
         if self.busy:
@@ -66,7 +68,7 @@ class App(Gtk.Application):
             def finish():
                 self.busy=False
                 for control in self.controls:control.set_sensitive(True)
-                if error:self.feedback.set_text('Could not confirm the result: '+error+' Refresh before retrying.')
+                if error:self.feedback.set_text('Could not confirm the result: '+error)
                 else:done(value)
                 return False
             GLib.idle_add(finish)
