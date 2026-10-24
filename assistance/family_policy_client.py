@@ -85,6 +85,30 @@ def open_content_filter(home=None):
     subprocess.run(['xdg-open',url],check=True,timeout=10)
     return 'Opened AdGuard Home management. This does not confirm that client DNS or filtering is active.'
 
+def collection_control(peer, operation, home=None):
+    home=pathlib.Path.home() if home is None else pathlib.Path(home)
+    if not isinstance(peer,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',peer):raise ValueError('Invalid learner identity')
+    if operation=={'op':'collection-status'}:action='status'
+    elif (set(operation)=={'op','enabled','acknowledge_raw_storage'} and operation['op']=='collection-set'
+          and type(operation['enabled']) is bool and type(operation['acknowledge_raw_storage']) is bool):
+        if operation['enabled'] and not operation['acknowledge_raw_storage']:
+            raise ValueError('Acknowledge raw ActivityWatch storage before enabling')
+        action='start' if operation['enabled'] else 'stop'
+    else:raise ValueError('Unsupported collection action')
+    executable=home/'.local/bin/family-lab-report'
+    if not executable.is_file():raise ValueError('Optional report adapter is not installed on this parent PC')
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(16384,16384))
+        result=subprocess.run(['/usr/bin/python3',str(executable),'control',peer,action],stdout=output,stderr=errors,timeout=35,preexec_fn=limits)
+        if result.returncode:raise ValueError('Collection control is not ready. Check report-key enrollment, learner connection and explicit collection-control setup.')
+        output.seek(0);data=json.loads(output.read(16385))
+    if not isinstance(data,dict) or type(data.get('ready')) is not bool:raise ValueError('Invalid collection status')
+    if action!='status' and (not data['ready'] or data.get('enabled') is not (action=='start')
+                             or (action=='stop' and data.get('state')!='inactive')):
+        raise ValueError('The collection service did not confirm this change; refresh its status')
+    return data
+
 def validate_card(data):
     if isinstance(data,dict) and 'policy_help' in data:
         if set(data)!={'id','time','message','topic','policy_help'} or data['topic']!='time-help' or not re.fullmatch('[a-f0-9]{32}',str(data['id'])) or not isinstance(data['policy_help'],dict) or set(data['policy_help'])!={'peer'} or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',str(data['policy_help']['peer'])):raise ValueError('Invalid time-help card')

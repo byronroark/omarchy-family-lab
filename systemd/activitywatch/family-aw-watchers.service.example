@@ -1,0 +1,14 @@
+[Unit]
+Description=Reviewed upstream Wayland active-window and idle watchers
+PartOf=family-activitywatch.target
+After=family-aw-server.service graphical-session.target
+
+[Service]
+Type=simple
+# Example: upstream awatcher can provide both window and idle buckets on Wayland.
+# Review/install it first, replace the path, and verify the actual bucket schemas.
+ExecStart=/REVIEWED/ABSOLUTE/PATH/awatcher
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes

@@ -139,3 +139,94 @@ Primary references checked October 24, 2026:
 - https://docs.activitywatch.net/en/latest/privacy.html
 - https://adguard-dns.io/kb/adguard-home/getting-started/
 - https://adguard-dns.io/kb/adguard-home/docker/
+
+## Family Manager controls (requires separate enrollment)
+
+Open **Collection and filtering settings** in Family Manager. The panel keeps its
+own status/error feedback without discarding the parent's schedule edits. Unready
+backends disable their controls. Refresh fetches actual backend status; it does not
+infer an enabled state merely from a saved checkbox.
+
+### Collection control permission
+
+Ordinary report-only enrollment remains read-only. A technical administrator must
+explicitly add `--allow-collection-control` when enabling the ActivityWatch reporting
+feature on the learner. This grants all enrolled `allowed_helpers` start/stop access
+to one fixed user target through their report SSH role; it does not grant a shell,
+root, arbitrary unit selection or policy editing. Prefer fresh separately scoped
+report keys if the household wants to keep its old read-only report keys unchanged.
+Removing the flag during explicit setup removes that permission for future requests.
+
+Before this grant, the administrator must review/install ActivityWatch and the
+appropriate Wayland watchers and supervise them under the fixed learner user units:
+
+- `family-activitywatch.target`
+- `family-aw-server.service`
+- `family-aw-watchers.service`
+
+Templates live in `systemd/activitywatch/`. The `.example` service paths are
+placeholders, not installable working commands. Replace them with reviewed upstream
+executables on that device. A Wayland watcher such as upstream `awatcher` can provide
+window and idle buckets; test both schemas. Review availability and behavior before
+choosing it. Install the reviewed units for the learner, reload that user's service
+manager and test start/stop manually before allowing remote control. Stop independent
+ActivityWatch/autostart instances to prevent duplicate or unsupervised collectors.
+No collection target is enabled at login by these templates.
+
+The adapter requires both services to be loaded and `PartOf` the fixed target. It
+checks target/service active state after changes. **Active service is not proof of
+complete event coverage.** Stop controls the supervised processes only; it does not
+erase history or disable a browser extension, which may retain queued events while
+the server is down. Turn off the extension as well when a full browser-collection
+pause is intended. A separate visible learner control for that extension remains
+upstream functionality. No claim is made that the learner cannot tamper with their
+own user services or raw records.
+
+The panel requires an explicit raw URL/title storage acknowledgement before Start.
+For deliberate CLI use, `family-lab-report control PEER status/start/stop` uses the
+same fixed endpoint; the `start` command itself is the explicit acknowledgement.
+No automatic retry of a mutating command occurs after a lost reply.
+
+### Per-learner AdGuard control enrollment
+
+A parent must first configure a persistent, device-specific AdGuard client with
+explicit per-client settings (`use_global_settings: false`) and verify its exact
+identifiers and DNS routing. No CIDR/wildcard/group entry is allowed. Each parent
+who needs native controls provides a private, parent-owned, mode-0600 file at
+`~/.config/family-lab/adguard-control.json` with these fields:
+
+```json
+{
+  "url": "https://YOUR_VERIFIED_ADGUARD_ORIGIN",
+  "username": "YOUR_ADGUARD_ACCOUNT",
+  "password": "YOUR_PRIVATE_PASSWORD",
+  "peer": "YOUR_STABLE_LEARNER_ID",
+  "client_name": "YOUR_EXACT_PERSISTENT_CLIENT_NAME",
+  "client_ids": ["YOUR_EXACT_DEVICE_IP_OR_CLIENT_ID"]
+}
+```
+
+Never put the completed file in Git, the setup profile, a screenshot or a report.
+This is an AdGuard administrator credential, **not a restricted read-only token**;
+AdGuard authorization determines its broader power. Family Lab's adapter limits
+itself to the enrolled client. Use only on a trusted parent's account. It verifies
+HTTPS normally, rejects redirects/proxies and bounds responses; there is no insecure
+TLS mode. Password storage in the desktop keyring is future work.
+
+Enable/Disable changes only that client's blocklist, parental-domain and safe-browsing
+booleans, preserving its other settings and all other clients. SafeSearch and blocked
+services remain separate upstream settings; disabling these three switches is not a
+promise that every possible DNS restriction is removed. A client identity change or
+inherited settings is rejected. Global AdGuard protection is never toggled; if paused,
+restore it through upstream management before enabling this learner's controls.
+
+Settings are read back after a change. A pre-write recheck detects intervening edits,
+but AdGuard's client-update endpoint provides no revision/CAS guarantee: avoid
+simultaneous edits of the same client in two parents' windows or upstream management.
+The panel confirms settings, not traffic coverage; test actual resolution and blocks.
+
+`tests/check_integrations_controls.py` exercises fixed-unit permission boundaries,
+service failures, private credentials, identity changes, per-client scope and
+unconfirmed writes with mocks only. No collection or filtering was enabled on family
+PCs during development. Primary API contract:
+https://github.com/AdguardTeam/AdGuardHome/blob/master/openapi/openapi.yaml

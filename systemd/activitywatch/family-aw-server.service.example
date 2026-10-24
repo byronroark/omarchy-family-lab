@@ -1,0 +1,13 @@
+[Unit]
+Description=Upstream ActivityWatch local server for Family Lab
+PartOf=family-activitywatch.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Administrator must replace this with the reviewed upstream installed executable.
+ExecStart=/REVIEWED/ABSOLUTE/PATH/aw-server
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes

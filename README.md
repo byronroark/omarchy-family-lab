@@ -92,3 +92,9 @@ raw URLs/titles locally; review that disclosure before enabling. AdGuard support
 registers an existing HTTPS dashboard or generates a reviewed digest-pinned Compose
 file, without starting services or changing DNS. Both features remain off by default;
 real application installation and machine acceptance are separate steps.
+
+Family Manager's **Collection and filtering settings** panel can control an explicitly
+enrolled ActivityWatch user target through the report role and the selected learner's
+AdGuard domain-protection settings through verified HTTPS. Controls stay disabled
+until the required services, permissions and private parent credentials are enrolled.
+See the integration guide for the expanded report-key capability and raw-data disclosure.

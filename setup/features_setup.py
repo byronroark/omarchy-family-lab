@@ -50,6 +50,7 @@ def main(argv=None):
     config.add_argument('--web-bucket'); config.add_argument('--afk-bucket'); config.add_argument('--window-bucket')
     config.add_argument('--browser-app', action='append', default=[])
     config.add_argument('--acknowledge-raw-activitywatch-storage', action='store_true')
+    config.add_argument('--allow-collection-control', action='store_true', help='Expand enrolled report helpers to start/stop the reviewed learner ActivityWatch target')
     config.add_argument('--adguard', choices=['off', 'existing'], default='off')
     config.add_argument('--adguard-url')
     config.add_argument('--apply', action='store_true')
@@ -75,6 +76,8 @@ def main(argv=None):
         activity = adapter['settings']({'enabled': True, 'port': 5600, 'web_bucket': args.web_bucket,
             'afk_bucket': args.afk_bucket, 'window_bucket': args.window_bucket, 'browser_apps': args.browser_app,
             'acknowledge_raw_storage': args.acknowledge_raw_activitywatch_storage})
+    if args.allow_collection_control and args.activitywatch != 'on':
+        raise ValueError('Collection control requires explicitly enabled ActivityWatch reporting')
     filtering = {'enabled': False}
     if args.adguard == 'existing':
         url = urllib.parse.urlsplit(args.adguard_url or '')
@@ -90,7 +93,8 @@ def main(argv=None):
     existing = json.loads(config_path.read_text()) if config_path.exists() else {}
     reporting = existing.setdefault('reporting', {})
     if args.activitywatch == 'on':
-        reporting.update(enabled=True, provider='activitywatch', activitywatch=activity)
+        reporting.update(enabled=True, provider='activitywatch', activitywatch=activity,
+                         allow_collection_control=args.allow_collection_control)
     elif reporting.get('provider') == 'activitywatch':
         reporting['enabled'] = False; reporting['activitywatch'] = activity
     existing.setdefault('integrations', {})['adguard_home'] = filtering
@@ -98,11 +102,13 @@ def main(argv=None):
     # Install only the separate report executable/adapter. Never overwrite the
     # parent's working controls or enroll a report key automatically.
     for source, name in [(ROOT / 'scripts/family-lab-report', 'family-lab-report'),
+                         (ROOT / 'integrations/family_collection_control.py', 'family_collection_control.py'),
                          (ROOT / 'integrations/family_activitywatch.py', 'family_activitywatch.py')]:
         dest = target / name
         if dest.exists() and dest.read_bytes() != source.read_bytes():
             raise ValueError('Existing report executable differs; back it up and review before updating: ' + name)
     for source, name in [(ROOT / 'scripts/family-lab-report', 'family-lab-report'),
+                         (ROOT / 'integrations/family_collection_control.py', 'family_collection_control.py'),
                          (ROOT / 'integrations/family_activitywatch.py', 'family_activitywatch.py')]:
         private_write(target / name, source.read_text())
         (target / name).chmod(0o755 if name == 'family-lab-report' else 0o644)
