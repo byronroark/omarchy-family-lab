@@ -18,6 +18,15 @@ class ClientTests(unittest.TestCase):
         with patch.object(client.subprocess,'run',side_effect=error):
             with self.assertRaisesRegex(ValueError,'Settings changed'):
                 client.request({'op':'get'},{'policy_alias':'family-test','ssh_config':'/private/config'})
+    def test_unreachable_host_is_actionable_without_exposing_address(self):
+        error=subprocess.CalledProcessError(255,['ssh'],stderr=b'ssh: connect to host 192.0.2.10 port 22: No route to host')
+        with patch.object(client.subprocess,'run',side_effect=error):
+            with self.assertRaises(ValueError) as caught:
+                client.request({'op':'get'},{'policy_alias':'family-test','ssh_config':'/private/config'})
+        text=str(caught.exception)
+        self.assertIn('Wake it if asleep',text);self.assertIn('Retry connection',text)
+        self.assertNotIn('192.0.2.10',text);self.assertNotIn('/private/config',text)
+
     def test_private_report_and_empty_coverage_are_explicit(self):
         with tempfile.TemporaryDirectory() as directory:
             summary={'coverage':'No application or website observations','timezone':'America/New_York','days':{}}
@@ -25,4 +34,19 @@ class ClientTests(unittest.TestCase):
             summary['days']={'2026-10-18':{'child':3600,'other':9999}}
             path=client.report(summary,'child',directory);text=path.read_text();self.assertIn('60.0',text);self.assertNotIn('other',text)
             with self.assertRaises(ValueError):client.report(summary,'../child',directory)
+    def test_optional_reports_require_a_separate_enrolled_route(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(client.subprocess,'run') as run:
+            with self.assertRaisesRegex(ValueError,'not enrolled'):
+                client.activity_report('child',directory)
+            run.assert_not_called()
+    def test_filter_link_never_accepts_credentials_or_unencrypted_url(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(client.subprocess,'run') as run:
+            path=pathlib.Path(directory)/'.config/family-lab/config.json';path.parent.mkdir(parents=True)
+            for url in ('http://example.org','https://admin:password@example.org','https://example.org/?token=secret'):
+                path.write_text(json.dumps({'integrations':{'adguard_home':{'enabled':True,'provider':'adguard-home','management_url':url}}}))
+                with self.assertRaises(ValueError):client.open_content_filter(directory)
+            run.assert_not_called()
+            path.write_text(json.dumps({'integrations':{'adguard_home':{'enabled':True,'provider':'adguard-home','management_url':'https://filter.example.org'}}}))
+            self.assertIn('does not confirm',client.open_content_filter(directory))
+            self.assertEqual(run.call_args.args[0],['xdg-open','https://filter.example.org'])
 if __name__=='__main__':unittest.main()

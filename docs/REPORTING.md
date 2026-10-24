@@ -82,3 +82,11 @@ Uber Notebook's documented command interface can import Markdown as Pages with h
 A future explicit “Add to Uber Notebook” adapter must use `omarchy-shell uber-notebook` commands, look for an existing parent page before creating one, handle the documented initial file-read retry, and disclose that imported reports create another retained copy (including notebook history/backups). Do not write notebook storage files directly. Remote report content must first be validated and rebuilt from the report schema; arbitrary Markdown from an SSH peer must not be imported automatically.
 
 Notebook pages are presentation, not authorization or the active policy. The documented interface does not establish a secure privileged button/action bridge. Live schedule changes, exceptions, report requests, and time grants must remain in the Family Lab UI/CLI through the separately authenticated policy/report endpoints. A displayed policy snapshot must show its revision and capture time, and cannot imply live status. Editing a note must never apply a child policy. Notebook availability must never affect enforcement.
+
+## Optional ActivityWatch provider
+
+The separate [upstream integration adapter](OPTIONAL_INTEGRATIONS.md) can now read
+selected local ActivityWatch browser, active-window and idle buckets on demand instead
+of requiring a manually imported snapshot. It does not install a tracker or enable
+collection itself. Setup requires explicit raw-data acknowledgement and preserves
+separate report-only SSH enrollment. Existing imported reports remain the default.

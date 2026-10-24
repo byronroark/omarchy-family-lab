@@ -20,7 +20,13 @@ def request(operation,config=None):
             detail=(exc.stderr or b'').decode(errors='replace').strip()
             prefix='Family Lab policy: '
             if detail.startswith(prefix):raise ValueError(detail[len(prefix):][:400]) from None
-            raise ValueError('Could not reach the policy service. Refresh to check the saved settings before retrying.') from None
+            if any(text in detail.lower() for text in ('no route to host','network is unreachable','connection timed out','operation timed out')):
+                raise ValueError('Child PC is unreachable. Wake it if asleep and check that both PCs are on the home network, then click Retry connection or Refresh. Any recent change is unconfirmed.') from None
+            if 'connection refused' in detail.lower():
+                raise ValueError('Child PC refused the connection. Check its SSH service, then retry. Any recent change is unconfirmed.') from None
+            if 'permission denied' in detail.lower():
+                raise ValueError('The policy connection was not authorized. Check the enrolled parent key and SSH agent, then retry.') from None
+            raise ValueError('Could not reach the policy service. Check the child PC and enrolled connection, then retry. Any recent change is unconfirmed.') from None
         output.seek(0);result=json.load(output)
     if not isinstance(result,dict):raise ValueError('Invalid policy response')
     if 'error' in result:raise ValueError(str(result['error'])[:500])
@@ -39,6 +45,69 @@ def report(summary,peer,home=None):
     fd,name=tempfile.mkstemp(prefix=peer+'-',suffix='.md',dir=folder)
     with os.fdopen(fd,'w') as output:output.write('\n'.join(lines)+'\n')
     return pathlib.Path(name)
+
+def activity_report(peer, home=None):
+    """Use the separately enrolled report role, never the parent-policy key."""
+    home = pathlib.Path.home() if home is None else pathlib.Path(home)
+    if not isinstance(peer,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',peer):
+        raise ValueError('Invalid learner report identity')
+    config = home/'.config/family-lab/config.json'
+    if not config.is_file() or not json.loads(config.read_text()).get('reporting',{}).get('report_aliases',{}).get(peer):
+        raise ValueError('Activity reporting is not enrolled yet. Set up ActivityWatch on the learner and a separate report-only SSH key on this parent PC.')
+    executable = home/'.local/bin/family-lab-report'
+    if not executable.is_file():raise ValueError('Install the optional Family Lab reporting adapter first')
+    today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(2*1024*1024,2*1024*1024))
+        result=subprocess.run(['/usr/bin/python3',str(executable),'request',peer,today,today],stdout=output,stderr=errors,timeout=30,preexec_fn=limits)
+        if result.returncode:
+            raise ValueError('Activity report unavailable. Check the separate reporting enrollment, learner connection and ActivityWatch watchers. No empty report was fabricated.')
+        output.seek(0);value=output.read(4097)
+    if len(value)>4096:raise ValueError('Invalid activity report path')
+    path=pathlib.Path(value.decode().strip())
+    if path.parent.resolve()!=(home/'.local/state/family-lab/reporting').resolve() or path.suffix!='.md' or not path.is_file():
+        raise ValueError('Activity report was not saved in the private reporting directory')
+    return path
+
+def open_content_filter(home=None):
+    """Explicit user action opens upstream management; never handles its password."""
+    from urllib.parse import urlsplit
+    home=pathlib.Path.home() if home is None else pathlib.Path(home)
+    config=home/'.config/family-lab/config.json'
+    if not config.is_file():raise ValueError('Optional content filtering has not been configured on this parent PC')
+    backend=json.loads(config.read_text()).get('integrations',{}).get('adguard_home',{})
+    if backend.get('enabled') is not True or backend.get('provider')!='adguard-home':
+        raise ValueError('Optional AdGuard Home connection is disabled')
+    url=backend.get('management_url','');parsed=urlsplit(url)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Configure a verified HTTPS AdGuard Home URL without embedded credentials')
+    subprocess.run(['xdg-open',url],check=True,timeout=10)
+    return 'Opened AdGuard Home management. This does not confirm that client DNS or filtering is active.'
+
+def collection_control(peer, operation, home=None):
+    home=pathlib.Path.home() if home is None else pathlib.Path(home)
+    if not isinstance(peer,str) or not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}',peer):raise ValueError('Invalid learner identity')
+    if operation=={'op':'collection-status'}:action='status'
+    elif (set(operation)=={'op','enabled','acknowledge_raw_storage'} and operation['op']=='collection-set'
+          and type(operation['enabled']) is bool and type(operation['acknowledge_raw_storage']) is bool):
+        if operation['enabled'] and not operation['acknowledge_raw_storage']:
+            raise ValueError('Acknowledge raw ActivityWatch storage before enabling')
+        action='start' if operation['enabled'] else 'stop'
+    else:raise ValueError('Unsupported collection action')
+    executable=home/'.local/bin/family-lab-report'
+    if not executable.is_file():raise ValueError('Optional report adapter is not installed on this parent PC')
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        import resource
+        def limits():resource.setrlimit(resource.RLIMIT_FSIZE,(16384,16384))
+        result=subprocess.run(['/usr/bin/python3',str(executable),'control',peer,action],stdout=output,stderr=errors,timeout=35,preexec_fn=limits)
+        if result.returncode:raise ValueError('Collection control is not ready. Check report-key enrollment, learner connection and explicit collection-control setup.')
+        output.seek(0);data=json.loads(output.read(16385))
+    if not isinstance(data,dict) or type(data.get('ready')) is not bool:raise ValueError('Invalid collection status')
+    if action!='status' and (not data['ready'] or data.get('enabled') is not (action=='start')
+                             or (action=='stop' and data.get('state')!='inactive')):
+        raise ValueError('The collection service did not confirm this change; refresh its status')
+    return data
 
 def validate_card(data):
     if isinstance(data,dict) and 'policy_help' in data:
