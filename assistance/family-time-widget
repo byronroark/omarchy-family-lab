@@ -6,7 +6,7 @@ import gi
 gi.require_version('Gtk','4.0');gi.require_version('Gdk','4.0')
 from gi.repository import Gtk,Gdk,GLib,GObject
 from family_identity import helper_config
-from family_policy_client import request,report
+from family_policy_client import request,report,activity_report,open_content_filter,collection_control
 from family_theme import themed_css
 DAYS=('mon','tue','wed','thu','fri','sat','sun')
 def theme_css(home=None):
@@ -126,9 +126,17 @@ class App(Gtk.Application):
             self.button(title,lambda op=op:self.operation(dict(op,peer=peer)),bedtime)
         tools=Gtk.Box(spacing=8,homogeneous=True);self.footer.append(tools)
         self.button('Save private time report',lambda:self.run_task(lambda:report(request({'op':'summary'}),peer),lambda path:self.feedback.set_text('Saved private report: '+str(path))),tools)
+        self.button('Website and app report - today (UTC)',lambda:self.run_task(lambda:activity_report(peer),lambda path:self.feedback.set_text('Saved private activity report: '+str(path))),self.footer)
+        self.button('Open content filter (optional)',lambda:self.run_task(open_content_filter,self.feedback.set_text),self.footer)
+        self.button('Collection and filtering settings',self.open_integrations,self.footer)
         self.button('Refresh',self.refresh,tools)
         self.button('Close',self.win.close,tools)
         self.run_task(lambda:request({'op':'break-pending'}),self.pending,quiet=True)
+    def open_integrations(self):
+        if getattr(self,'integration_window',None) and self.integration_window.get_visible():
+            self.integration_window.present();return
+        from family_integrations import open_panel
+        self.integration_window=open_panel(self.win,self.config['policy_peer'],collection_control)
     def pending(self,result):
         for item in result['requests']:
             self.label('Break request: '+item['change']+(' '+str(item['minutes'])+' minutes' if item['minutes'] else '')+' — '+item['peer'])

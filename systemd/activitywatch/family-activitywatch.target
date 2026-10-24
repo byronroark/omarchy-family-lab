@@ -1,0 +1,6 @@
+[Unit]
+Description=Family Lab supervised ActivityWatch collection
+Wants=family-aw-server.service family-aw-watchers.service
+After=graphical-session.target
+
+# Deliberately no Install/WantedBy: first activation is an explicit parent action.

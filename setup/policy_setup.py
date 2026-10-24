@@ -26,7 +26,7 @@ def enroll_helper(api,profile,args):
     config.update(policy_alias=alias,policy_peer=child['id'])
     tx=api['Files'](home,home/'.local/state/family-help-install/policy-helper.json',args.adopt_existing)
     try:
-        for name in ('family_policy_client.py','family-time-widget','family-help-dad','family-help-widget','family_identity.py','family_theme.py'):
+        for name in ('family_policy_client.py','family_integrations.py','family-time-widget','family-help-dad','family-help-widget','family_identity.py','family_theme.py'):
             tx.write('.local/bin/'+name,(api['ROOT']/'assistance'/name).read_bytes(),0o644 if name.endswith('.py') else 0o755)
         tx.write(str(ssh.relative_to(home)),(text.rstrip()+'\n'+start+'\n'.join(lines)+'\n'+end).encode(),0o600)
         tx.write('.config/family-help/helper.json',api['encoded'](config),0o600)
