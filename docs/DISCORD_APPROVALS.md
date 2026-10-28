@@ -141,7 +141,7 @@ Live household checks performed October 27, 2026:
 - [x] Learning topic: native card appeared; Discord changed and approved the subject;
       learner saw the revised topic. No course was automatically assigned.
 - [x] Native topic denial suppresses Discord escalation and learner sees declined.
-- [ ] Informational bedtime-help delivery/acknowledgment (final live check pending).
+- [x] Informational bedtime-help delivery/acknowledgment; no extra time granted.
 - [x] Synthetic tests against deployed bot reject non-parent/wrong-server/wrong-channel.
 - [x] Actual restricted break transport rejects a pause/schedule operation.
 
