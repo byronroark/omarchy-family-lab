@@ -1,0 +1,23 @@
+#!/usr/bin/python3 -I
+"""Root-reviewed forced endpoint: topic metadata and topic decisions only."""
+import json,os,pwd,select,subprocess,sys,time
+caller=os.environ.get('SUDO_USER','')
+if os.geteuid()!=0 or caller not in ['familytopics-dad','familytopics-discord'] or len(sys.argv)!=1 or os.isatty(0):sys.exit(1)
+raw=b'';deadline=time.monotonic()+8
+try:
+ while True:
+  if not select.select([0],[],[],max(0,deadline-time.monotonic()))[0]:raise ValueError('Input timeout')
+  chunk=os.read(0,4097-len(raw));raw+=chunk
+  if len(raw)>4096:raise ValueError('Input too large')
+  if not chunk:break
+ value=json.loads(raw)
+ if value!={'op':'topic-pending'}:
+  if not isinstance(value,dict) or set(value)!={'op','id','decision','expected_topic','replacement','parent'} or value['op']!='topic-decision' or value['parent'] not in ['dad','mom'] or value['decision'] not in ['approve','deny']:raise ValueError('Operation not permitted')
+  if caller=='familytopics-dad' and value['parent']!='dad':raise ValueError('Parent identity mismatch')
+ u=pwd.getpwnam('familylearn')
+ result=subprocess.run(['/usr/bin/docker','exec','-i','--user',f'{u.pw_uid}:{u.pw_gid}','family-learning-learner','python','-m','deeptutor.family_learning.topic_requests_cli'],input=json.dumps(value).encode(),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=20)
+ if len(result.stdout)>65536:raise ValueError('Response too large')
+ print(json.dumps(json.loads(result.stdout)))
+ sys.exit(result.returncode)
+except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError):
+ print('{"ok":false,"error":"Topic service unavailable or operation refused"}');sys.exit(1)

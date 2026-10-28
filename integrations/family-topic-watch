@@ -1,0 +1,65 @@
+#!/usr/bin/python3
+"""Native parent topic cards. Fixed enrolled SSH route; no AI calls."""
+import json,os,subprocess,threading
+from pathlib import Path
+import gi
+gi.require_version('Gtk','4.0')
+from gi.repository import Gtk,Gio,GLib
+from family_theme import install_theme
+
+CONFIG=json.loads((Path.home()/'.config/family-help/topics.json').read_text())
+
+def rpc(value):
+ result=subprocess.run(['/usr/bin/ssh','-F','/dev/null','-i',CONFIG['key'],'-o','IdentityAgent=none','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+CONFIG['known_hosts'],'-o','BatchMode=yes','-o','ConnectTimeout=5','-T',CONFIG['account']+'@'+CONFIG['host']],input=(json.dumps(value)+'\n').encode(),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=25)
+ if result.returncode or len(result.stdout)>65536:raise ValueError('Topic connection unavailable')
+ value=json.loads(result.stdout)
+ if not value.get('ok'):raise ValueError('Topic request changed or was already reviewed')
+ return value['result']
+
+class App(Gtk.Application):
+ def __init__(self):
+  super().__init__(application_id='org.familylab.HelpDad',flags=Gio.ApplicationFlags.NON_UNIQUE)
+  self.windows={};self.dismissed=set();self.polling=False
+ def do_activate(self):
+  self.hold();self.theme=install_theme(b'window {background:#101820;color:#d9e5ee;} button {padding:10px;border:1px solid #74e0c3;} entry {padding:10px;}')
+  GLib.timeout_add_seconds(10,self.poll);self.poll()
+ def poll(self):
+  if self.polling:return True
+  self.polling=True
+  def work():
+   try:rows=rpc({'op':'topic-pending'})['requests'];GLib.idle_add(self.update,rows)
+   except (OSError,ValueError,subprocess.SubprocessError):pass
+   finally:GLib.idle_add(self.end_poll)
+  threading.Thread(target=work,daemon=True).start();return True
+ def end_poll(self):self.polling=False
+ def update(self,rows):
+  pending={r['id'] for r in rows}
+  for key,win in list(self.windows.items()):
+   if key not in pending:win.close();self.windows.pop(key,None)
+  for row in rows:
+   if row['id'] not in self.windows and row['id'] not in self.dismissed:self.show_card(row)
+ def show_card(self,row):
+  win=Gtk.ApplicationWindow(application=self,title='Family Help');win.set_default_size(600,300)
+  box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=14)
+  for side in ['top','bottom','start','end']:getattr(box,'set_margin_'+side)(24)
+  box.append(Gtk.Label(label='Learning topic request',xalign=0))
+  note=Gtk.Label(label='Approve an idea, change its scope, or decline. This does not generate or assign a course.',wrap=True,xalign=0);box.append(note)
+  entry=Gtk.Entry(text=row['topic']);entry.set_max_length(160);box.append(entry)
+  status=Gtk.Label(label='',wrap=True);box.append(status)
+  buttons=Gtk.Box(spacing=10)
+  def decide(choice):
+   for child in [approve,deny,dismiss]:child.set_sensitive(False)
+   replacement=entry.get_text()
+   def work():
+    try:
+     rpc({'op':'topic-decision','id':row['id'],'decision':choice,'expected_topic':row['topic'],'replacement':replacement if choice=='approve' else None,'parent':'dad'})
+     GLib.idle_add(win.close)
+    except (OSError,ValueError,subprocess.SubprocessError):GLib.idle_add(status.set_text,'Decision unconfirmed. Check Family Learning or send a new request.')
+   threading.Thread(target=work,daemon=True).start()
+  approve=Gtk.Button(label='Approve topic');approve.connect('clicked',lambda *_:decide('approve'));buttons.append(approve)
+  deny=Gtk.Button(label='Decline');deny.connect('clicked',lambda *_:decide('deny'));buttons.append(deny)
+  dismiss=Gtk.Button(label='Later');dismiss.connect('clicked',lambda *_:win.close());buttons.append(dismiss)
+  def closed(*_):self.dismissed.add(row['id']);self.windows.pop(row['id'],None);return False
+  win.connect('close-request',closed);box.append(buttons);win.set_child(box);self.windows[row['id']]=win;win.present()
+
+App().run()

@@ -20,7 +20,7 @@ BarWidget {
         anchors.fill: parent
         bar: root.bar
         text: "\uf0c0"
-        tooltipText: "Family Manager - breaks and bedtime"
+        tooltipText: "Family Lab Manager"
         onPressed: function(buttonCode) {
             if (buttonCode === Qt.LeftButton) root.openManager()
         }
