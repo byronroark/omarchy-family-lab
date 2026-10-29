@@ -30,9 +30,14 @@ Rectangle {
             color: "#80c7a3"; Layout.alignment: Qt.AlignHCenter
         }
         Button {
-            text: "Hibernate now"; visible: card.state.reason === "outside-hours"
+            text: "Hibernate Now"; visible: card.state.reason === "outside-hours"
             enabled: !!(card.state.healthy && card.state.blocked && card.state.hibernate && card.state.hibernate.enabled)
-            Layout.alignment: Qt.AlignHCenter; onClicked: card.hibernateNow()
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: 250; Layout.preferredHeight: 48
+            font.pixelSize: 18
+            contentItem: Text { text: parent.text; color: "#111c17"; font: parent.font; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+            background: Rectangle { radius: 8; color: "#80c7a3"; opacity: parent.enabled ? 1 : 0.45 }
+            onClicked: card.hibernateNow()
         }
         Label {
             visible: card.state.reason === "outside-hours" && !!(card.state.hibernate && card.state.hibernate.error)

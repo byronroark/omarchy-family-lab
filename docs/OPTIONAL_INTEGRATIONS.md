@@ -16,9 +16,17 @@ profile; matching an app identifier cannot distinguish two profiles of the same 
 **Raw-data disclosure:** ActivityWatch may retain full URLs, page and window titles
 in its own local database. Family Lab reads selected events transiently and exports
 only app identifiers, domain names and estimated durations. That does not minimize
-or erase upstream raw records. Explain collection to the learner, verify private-mode
-behavior, and decide retention/deletion before enabling it. Automatic deletion of
-ActivityWatch records and Family Lab reports is not implemented in this release.
+or erase upstream raw records. Explain collection to the learner and verify private-mode
+behavior before enabling it. The separate
+`integrations/family_activitywatch_retention.py` helper previews expired events by
+default; `--apply` deletes them. It targets only this hostname's window, idle and
+browser buckets on loopback port 5600. Events starting more than 14 days ago are
+removed whole, including merged events crossing the cutoff. It also deletes
+`report-*.md` files older than 14 days from the executing user's report folder.
+Imported snapshots, exported files, other computers' buckets and backups are not
+covered. Feature selection does not install or schedule cleanup: install it in the
+desktop user's private executable directory, schedule it hourly, and verify an
+initial successful run. It never logs event content or creates raw-data backups.
 Keep ActivityWatch bound to loopback. This adapter supports its classic local API,
 not authenticated server profiles; never expose the default unauthenticated API to LAN.
 
