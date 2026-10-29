@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Native parent topic cards. Fixed enrolled SSH route; no AI calls."""
-import json,os,subprocess,threading
+import json,os,subprocess,sys,threading
 from pathlib import Path
 import gi
 gi.require_version('Gtk','4.0')
@@ -8,6 +8,21 @@ from gi.repository import Gtk,Gio,GLib
 from family_theme import install_theme
 
 CONFIG=json.loads((Path.home()/'.config/family-help/topics.json').read_text())
+PREVIEW='--preview' in sys.argv
+CSS=b'''
+.family-topic { background: #101820; color: #d9e5ee; font-family: monospace; font-size: 14px; }
+.family-topic .heading { color: #74e0c3; font-size: 21px; font-weight: bold; }
+.family-topic .prompt { color: #70d5ff; font-size: 12px; font-weight: bold; }
+.family-topic .muted { color: #91a5b5; font-size: 12px; }
+.family-topic .status { color: #ffb9a9; font-size: 12px; }
+.family-topic entry { background: #192733; color: #edf6ff; border: 1px solid #3e586b; border-radius: 7px; padding: 11px; font-family: monospace; }
+.family-topic entry:focus-within { border-color: #74e0c3; }
+.family-topic button { background: #20313e; color: #e1edf5; border: 1px solid #425c70; border-radius: 6px; padding: 9px 12px; font-family: monospace; }
+.family-topic button:hover { background: #2a4252; }
+.family-topic button:disabled { color: #6b8090; border-color: #283b49; }
+.family-topic .primary { background: #183f3a; color: #95f5d7; border-color: #58b99a; font-weight: bold; }
+.family-topic .later { background: transparent; color: #91a5b5; }
+'''
 
 def rpc(value):
  result=subprocess.run(['/usr/bin/ssh','-F','/dev/null','-i',CONFIG['key'],'-o','IdentityAgent=none','-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o','UserKnownHostsFile='+CONFIG['known_hosts'],'-o','BatchMode=yes','-o','ConnectTimeout=5','-T',CONFIG['account']+'@'+CONFIG['host']],input=(json.dumps(value)+'\n').encode(),stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=25)
@@ -18,10 +33,12 @@ def rpc(value):
 
 class App(Gtk.Application):
  def __init__(self):
-  super().__init__(application_id='org.familylab.HelpDad',flags=Gio.ApplicationFlags.NON_UNIQUE)
+  super().__init__(application_id='org.familylab.HelpTopics',flags=Gio.ApplicationFlags.NON_UNIQUE)
   self.windows={};self.dismissed=set();self.polling=False
  def do_activate(self):
-  self.hold();self.theme=install_theme(b'window {background:#101820;color:#d9e5ee;} button {padding:10px;border:1px solid #74e0c3;} entry {padding:10px;}')
+  self.theme=install_theme(CSS)
+  if PREVIEW:self.show_card({'id':'preview','topic':'Python robots','preview':True});return
+  self.hold()
   GLib.timeout_add_seconds(10,self.poll);self.poll()
  def poll(self):
   if self.polling:return True
@@ -39,27 +56,36 @@ class App(Gtk.Application):
   for row in rows:
    if row['id'] not in self.windows and row['id'] not in self.dismissed:self.show_card(row)
  def show_card(self,row):
-  win=Gtk.ApplicationWindow(application=self,title='Family Help');win.set_default_size(600,300)
-  box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=14)
+  win=Gtk.ApplicationWindow(application=self,title='Ask Dad - Learning topic')
+  win.set_default_size(620,340);win.set_resizable(False);win.set_decorated(False);win.add_css_class('family-topic')
+  box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=13)
   for side in ['top','bottom','start','end']:getattr(box,'set_margin_'+side)(24)
-  box.append(Gtk.Label(label='Learning topic request',xalign=0))
-  note=Gtk.Label(label='Approve an idea, change its scope, or decline. This does not generate or assign a course.',wrap=True,xalign=0);box.append(note)
+  heading=Gtk.Label(label='$ ask-dad',xalign=0);heading.add_css_class('heading')
+  handle=Gtk.WindowHandle();handle.set_child(heading);box.append(handle)
+  label=Gtk.Label(label='LEARNING TOPIC REQUEST',xalign=0);label.add_css_class('prompt');box.append(label)
+  note=Gtk.Label(label='Review the idea, or edit the topic before approving.',wrap=True,xalign=0);note.set_max_width_chars(56);box.append(note)
   entry=Gtk.Entry(text=row['topic']);entry.set_max_length(160);box.append(entry)
-  status=Gtk.Label(label='',wrap=True);box.append(status)
+  status=Gtk.Label(label='',wrap=True,xalign=0);status.add_css_class('status');status.set_visible(False);box.append(status)
   buttons=Gtk.Box(spacing=10)
   def decide(choice):
+   if row.get('preview'):return
    for child in [approve,deny,dismiss]:child.set_sensitive(False)
    replacement=entry.get_text()
    def work():
     try:
      rpc({'op':'topic-decision','id':row['id'],'decision':choice,'expected_topic':row['topic'],'replacement':replacement if choice=='approve' else None,'parent':'dad'})
      GLib.idle_add(win.close)
-    except (OSError,ValueError,subprocess.SubprocessError):GLib.idle_add(status.set_text,'Decision unconfirmed. Check Family Learning or send a new request.')
+    except (OSError,ValueError,subprocess.SubprocessError):
+     def failed():status.set_text('Decision unconfirmed. Check Family Learning before retrying.');status.set_visible(True);dismiss.set_sensitive(True)
+     GLib.idle_add(failed)
    threading.Thread(target=work,daemon=True).start()
-  approve=Gtk.Button(label='Approve topic');approve.connect('clicked',lambda *_:decide('approve'));buttons.append(approve)
+  approve=Gtk.Button(label='Approve topic');approve.add_css_class('primary');approve.connect('clicked',lambda *_:decide('approve'));buttons.append(approve)
   deny=Gtk.Button(label='Decline');deny.connect('clicked',lambda *_:decide('deny'));buttons.append(deny)
-  dismiss=Gtk.Button(label='Later');dismiss.connect('clicked',lambda *_:win.close());buttons.append(dismiss)
+  dismiss=Gtk.Button(label='Close preview' if row.get('preview') else 'Later');dismiss.add_css_class('later');dismiss.connect('clicked',lambda *_:win.close());buttons.append(dismiss)
+  if row.get('preview'):approve.set_sensitive(False);deny.set_sensitive(False)
   def closed(*_):self.dismissed.add(row['id']);self.windows.pop(row['id'],None);return False
-  win.connect('close-request',closed);box.append(buttons);win.set_child(box);self.windows[row['id']]=win;win.present()
+  win.connect('close-request',closed);box.append(buttons)
+  foot=Gtk.Label(label='Approval saves an idea. You create and assign the course separately.',wrap=True,xalign=0);foot.set_max_width_chars(60);foot.add_css_class('muted');box.append(foot)
+  win.set_child(box);self.windows[row['id']]=win;win.present()
 
-App().run()
+App().run([sys.argv[0]])
