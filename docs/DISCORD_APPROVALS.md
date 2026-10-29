@@ -124,6 +124,15 @@ Start it in the graphical user session, never root. It polls the topic-only
 endpoint and uses the shared Omarchy theme. It has no application password or
 provider token. The learner's normal web session submits the topic.
 
+Topic cards use the dedicated `org.familylab.HelpTopics` app ID and a compact
+620×340 layout. Install `integrations/family-topic-popup.lua` into the parent's
+user Hyprland configuration and load it from `hyprland.lua` after Omarchy's
+defaults. This precise rule floats and centers only topic cards, not Dino or
+other help windows. Reload Hyprland and check `hyprctl configerrors`. The shared
+`family_theme` helper refreshes colors when Omarchy's palette changes. Run
+`family-topic-watch --preview` to inspect the themed card without polling or
+submitting a decision; its approval controls are disabled.
+
 These are reviewed operator deployment steps; the master enrollment wizard does
 not yet automate Discord token setup or edge enrollment. Keep private staging,
 configuration, key files, activity data, app images and backups outside Git.
